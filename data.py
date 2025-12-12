@@ -77,45 +77,8 @@ class ReverseDataset(Dataset):
     
 # Functions to fetch DataLoaders
 
-def get_dataloaders_reverse(n_samples_train, n_samples_val, batch_size):
+def get_dataloader_reverse(n_samples, batch_size):
     
-    train_iter = ReverseDataset(n_samples_train, pad_idx=PAD_IDX, sos_idx=SOS_IDX, eos_idx=EOS_IDX)
-    eval_iter = ReverseDataset(n_samples_val, pad_idx=PAD_IDX, sos_idx=SOS_IDX, eos_idx=EOS_IDX)
-    dataloader_train = DataLoader(train_iter, batch_size, collate_fn=collate_fn)
-    dataloader_val = DataLoader(eval_iter, batch_size, collate_fn=collate_fn)
-    return dataloader_train, dataloader_val
-    
-"""
-
-# Load data
-try:
-    with open('input.txt', 'r', encoding='utf-8') as f:
-        text = f.read()
-except FileNotFoundError:
-    print("Error: 'input.txt' not found. Please download TinyShakespeare or provide your own text file.")
-    text = "This is a dummy text to ensure the code compiles if no file is found. " * 1000
-
-# Simple Character-level Tokenizer (for demonstration)
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s]
-decode = lambda l: ''.join([itos[i] for i in l])
-
-# Train/Test Split
-data = torch.tensor(encode(text), dtype=torch.long)
-n = int(0.9 * len(data))
-train_data = data[:n]
-val_data = data[n:]
-
-# Data Batcher
-def get_batch(split):
-    data_source = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data_source) - block_size, (batch_size,))
-    x = torch.stack([data_source[i:i+block_size] for i in ix])
-    y = torch.stack([data_source[i+1:i+block_size+1] for i in ix])
-    x, y = x.to(device), y.to(device)
-    return x, y
-
-"""
+    d_iter = ReverseDataset(n_samples, pad_idx=PAD_IDX, sos_idx=SOS_IDX, eos_idx=EOS_IDX)
+    dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
+    return dataloader

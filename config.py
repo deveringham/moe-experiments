@@ -18,12 +18,14 @@ n_heads = 4 # Number of attention heads
 n_encoder_layers = 1 # Number of transformer encoder layers
 n_decoder_layers = 1 # Number of transformer decoder layers
 dropout = 0.1
-n_epoch = 1
+n_epoch = 4
 n_experts = 64
-ff_dim = 1024 # Hidden dimension of FFNs in basic Transformer
+ff_dim = 2048 # Hidden dimension of FFNs in basic Transformer
 expert_dim = ff_dim//n_experts # Hidden dimension of expert FFNs
-n_samples_train = 50000
 n_samples_val = 10000
+n_samples_train = n_samples_val*5
+n_samples_test = n_samples_val
+
 
 # Device selection
 device = 'cuda' if torch.cuda.is_available() else 'cpu'

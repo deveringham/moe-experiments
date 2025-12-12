@@ -14,6 +14,7 @@ from basic_transformer import *
 from moe import *
 from data import *
 from utils import *
+from monitoring import *
 
 ################################################################################
 
@@ -32,10 +33,11 @@ def run_experiment_train_basic():
     model = Transformer(**args)
     
     # Count parameters in model
-    print(f"Total Trainable Params: {count_parameters(model)}")
+    print(f"Total Trainable Params: {count_params(model)}")
     
     # Get datasets
-    dataloader_train, dataloader_val = get_dataloaders_reverse(n_samples_train, n_samples_val, batch_size=batch_size)
+    dataloader_train = get_dataloader_reverse(n_samples_train, batch_size=batch_size)
+    dataloader_val = get_dataloader_reverse(n_samples_val, batch_size=batch_size)
     
     # Initialize model parameters
     for p in model.parameters():
@@ -67,7 +69,7 @@ def run_experiment_train_basic():
         history['eval_acc'] += hist_acc
         print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Train acc: {train_acc:.3f}, Val loss: {val_loss:.3f}, Val acc: {val_acc:.3f} "f"Epoch time = {(end_time - start_time):.3f}s"))
     
-    test(model)
+    return model
 
 ################################################################################
 
@@ -87,10 +89,11 @@ def run_experiment_train_moe():
     model = TransformerMoE(**args)
     
     # Count parameters in model
-    print(f"Total Trainable Params: {count_parameters(model)}")
+    print(f"Total Trainable Params: {count_params(model)}")
     
     # Get datasets
-    dataloader_train, dataloader_val = get_dataloaders_reverse(n_samples_train, n_samples_val, batch_size=batch_size)
+    dataloader_train = get_dataloader_reverse(n_samples_train, batch_size=batch_size)
+    dataloader_val = get_dataloader_reverse(n_samples_val, batch_size=batch_size)
     
     # Initialize model parameters
     for p in model.parameters():
@@ -122,10 +125,25 @@ def run_experiment_train_moe():
         history['eval_acc'] += hist_acc
         print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Train acc: {train_acc:.3f}, Val loss: {val_loss:.3f}, Val acc: {val_acc:.3f} "f"Epoch time = {(end_time - start_time):.3f}s"))
     
-    test(model)
+    return model
 
 ################################################################################
-        
+
+def run_experiment_inference_moe_probe(model):
+    
+    # Attach monitoring probe to model
+    probe = MoEProbe(k=2)
+    probe.register(model)
+    
+    # Do some inference
+    test(model)
+    
+    # Look at probe results
+    probe.print_count()
+    probe.plot_loadbalance()
+    
+################################################################################
+    
 def train(model, optimizer, loader, loss_fn, epoch):
     
     # Put model in training mode
@@ -186,11 +204,12 @@ def evaluate(model, loader, loss_fn):
     return losses / len(list(loader)), acc / len(list(loader)), history_loss, history_acc
 
 
-# Predict class helps with transformer inference
-class Translator(nn.Module):
-    def __init__(self, transformer):
-        super(Translator, self).__init__()
+# This class helps with transformer inference for the reverse string dataset
+class TransformerInferenceReverse(nn.Module):
+    def __init__(self, transformer, verbose=False):
+        super(TransformerInferenceReverse, self).__init__()
         self.transformer = transformer
+        self.verbose = verbose
     
     @staticmethod
     def str_to_tokens(s):
@@ -202,8 +221,9 @@ class Translator(nn.Module):
     
     def __call__(self, sentence, max_length=None, pad=False):
         
-        x = torch.tensor(self.str_to_tokens(sentence))
-        x = torch.cat([torch.tensor([SOS_IDX]), x, torch.tensor([EOS_IDX])]).unsqueeze(0)
+        #x = torch.tensor(self.str_to_tokens(sentence))
+        #x = torch.cat([torch.tensor([SOS_IDX]), x, torch.tensor([EOS_IDX])]).unsqueeze(0)
+        x = sentence
         
         encoder_output, mask = self.transformer.encode(x) # (B, S, E)
         
@@ -216,60 +236,46 @@ class Translator(nn.Module):
             y = outputs[:, :step]
             probs = self.transformer.decode(y, encoder_output)
             output = torch.argmax(probs, dim=-1)
-            print(f"Knowing {y} we output {output[:, -1]}")
+            if self.verbose:
+                print(f"Knowing {y} we output {output[:, -1]}")
             if output[:, -1].detach().numpy() in (EOS_IDX, SOS_IDX):
                 break
             outputs[:, step] = output[:, -1]
-            
         
         return self.tokens_to_str(outputs[0])
 
 def test(model):
     
+    # Helper functions to convert from strings to tokens for reverse dataset
+    @staticmethod
+    def str_to_tokens(s):
+        return [ord(z)-97+3 for z in s]
+    @staticmethod
+    def tokens_to_str(tokens):
+        return "".join([chr(x+94) for x in tokens])
     
-    prompt = "helloworld"
-    translator = Translator(model)
-    output = translator(prompt)
-    
-    print("For prompt \"" + prompt + "\", got output: \"" + output + "\"")
-    
-"""
-
-# Evaluation loss calculation
-@torch.no_grad()
-def evaluation_loss():
-    out = {}
+    # Put model in evaluation mode
     model.eval()
-    for split in ['train', 'val']
-        losses = torch.zeros(eval_iters)
-        for i in range(eval_iter):
-            xb, yb = get_batch(split)
-            outputs = model(xb, yb)
-            losses[i] = None # Compute loss here
-        out[split] = losses.mean()
-    model.train()
-    return out
-            
-
-# Training loop
-def train_model(model):
-    model = model.to(device)
     
-    # Create optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    # Get a test dataset
+    dataloader_test = get_dataloader_reverse(n_samples_test, batch_size=batch_size)
     
-    print(f"Training on {device}...")
-    for iter in range(max_iters):
+    model_inference = TransformerInferenceReverse(model)
+    for x, y in tqdm(dataloader_test, position=0, leave=True):
         
-        # Evaluate the validation loss every once in a while
-        if iter % eval_interval == 0 or iter == (max_iters - 1):
-            losses = evaluation_loss()
-            print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        #print(x)
+        logits = model(x, y[:, :-1])
+        #loss = loss_fn(logits.contiguous().view(-1, model.vocab_size), y[:, 1:].contiguous().view(-1))
+        #losses += loss.item()
         
-        xb, yb = get_batch('train')
-        outputs = model(xb, yb)
-        optimizer.zero_grad(set_to_non=True)
-        loss = None # Compute loss here
-        loss.backward()
-        optimizer.step()
-"""
+        preds = logits.argmax(dim=-1)
+        masked_pred = preds * (y[:, 1:]!=PAD_IDX)
+        #accuracy = (masked_pred == y[:, 1:]).float().mean()
+        #acc += accuracy.item()
+        #output = model_inference(x)
+        
+        for prompt, pred in zip(x, preds):
+            prompt = tokens_to_str(prompt)
+            pred = tokens_to_str(pred)
+            print("For prompt \"" + prompt + "\", got output: \"" + pred + "\"")\
+        

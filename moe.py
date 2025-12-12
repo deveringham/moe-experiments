@@ -202,7 +202,7 @@ class DecoderMoE(nn.Module):
         self.positional_encoding = PositionalEncoding(
             embedding_dim=embedding_dim, dropout=dropout)
         self.decoder_layers = nn.ModuleList([
-            DecoderLayerMoE(embedding_dim, dropout, n_heads) for _ in range(n_decoder_layers)])
+            DecoderLayerMoE(embedding_dim, expert_dim, n_experts, dropout, n_heads) for _ in range(n_decoder_layers)])
         
         
     def forward(self, tgt, memory, tgt_mask=None, tgt_padding_mask=None, memory_padding_mask=None):
@@ -243,15 +243,15 @@ class TransformerMoE(nn.Module):
         
         #self.encoder = Encoder(
         #    self.vocab_size, self.embedding_dim, self.n_experts*self.expert_dim, self.dropout, self.n_encoder_layers, self.n_heads)
-        self.decoder = Decoder(
-            self.vocab_size, self.embedding_dim, self.n_experts*self.expert_dim, self.dropout, self.n_decoder_layers, self.n_heads)
+        #self.decoder = Decoder(
+        #    self.vocab_size, self.embedding_dim, self.n_experts*self.expert_dim, self.dropout, self.n_decoder_layers, self.n_heads)
 
         self.encoder = EncoderMoE(
             self.vocab_size, self.embedding_dim, self.expert_dim, self.n_experts,
             self.dropout, self.n_encoder_layers, self.n_heads)
-        #self.decoder = DecoderMoE(
-        #    self.vocab_size, self.embedding_dim, self.expert_dim=expert_dim, self.n_experts=n_experts,
-        #    self.dropout, self.n_decoder_layers, self.n_heads)
+        self.decoder = DecoderMoE(
+            self.vocab_size, self.embedding_dim, self.expert_dim, self.n_experts,
+            self.dropout, self.n_decoder_layers, self.n_heads)
         
         self.fc = nn.Linear(self.embedding_dim, self.vocab_size)
 
