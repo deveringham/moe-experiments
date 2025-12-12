@@ -44,11 +44,11 @@ class ExpertFFN(nn.Module):
 
 # Single expert layer composed of experts and a gating function
 class ExpertLayer(nn.Module):
-    def __init__(self, input_dim=512, gating_dim=512, expert_dim=2048, num_experts=64, output_dim=512, k=1):
+    def __init__(self, input_dim=512, gating_dim=512, expert_dim=2048, n_experts=64, output_dim=512, k=1):
         super(ExpertLayer, self).__init__()
-        self.gating_func = GatingFuncTopK(gating_dim, num_experts, k)
+        self.gating_func = GatingFuncTopK(gating_dim, n_experts, k)
         self.experts = nn.ModuleList( \
-            [ExpertFFN(input_dim, expert_dim, output_dim) for _ in range(num_experts)])
+            [ExpertFFN(input_dim, expert_dim, output_dim) for _ in range(n_experts)])
         self.layer_norm = nn.LayerNorm(output_dim)
         
     def forward(self, x):
@@ -86,7 +86,7 @@ def ZLoss(router_outputs):
 # Encoder layer composed of experts
 class EncoderLayerMoE(nn.Module):
     
-    def __init__(self, embedding_dim=256, dropout=0.1, n_heads=4):
+    def __init__(self, embedding_dim=256, expert_dim=2048, n_experts=64, dropout=0.1, n_heads=4):
         """
         embedding_dim: Dimensionality of embeddings.
         droupout: Dropout probability.
@@ -97,7 +97,8 @@ class EncoderLayerMoE(nn.Module):
         self.mha = MultiHeadAttention(embedding_dim=embedding_dim, n_heads=n_heads)
         self.norm1 = nn.LayerNorm(embedding_dim)
         self.ff = ExpertLayer(input_dim=embedding_dim, gating_dim=embedding_dim, 
-                              expert_dim=embedding_dim, output_dim=embedding_dim)
+                              expert_dim=expert_dim, n_experts=n_experts,
+                              output_dim=embedding_dim)
         self.norm2 = nn.LayerNorm(embedding_dim)
         self.dropout = nn.Dropout(dropout)
         
@@ -114,7 +115,7 @@ class EncoderLayerMoE(nn.Module):
 # Encoder composed of expert layers
 class EncoderMoE(nn.Module):
     
-    def __init__(self, vocab_size, embedding_dim=256, dropout=0.1, n_encoder_layers=4, n_heads=4):
+    def __init__(self, vocab_size, embedding_dim=256, expert_dim=2048, n_experts=64, dropout=0.1, n_encoder_layers=4, n_heads=4):
         """
         vocab_size: Size of dictionary of embeddings.
         embedding_dim: Dimensionality of embeddings.
@@ -130,7 +131,7 @@ class EncoderMoE(nn.Module):
         self.positional_encoding = PositionalEncoding(
             embedding_dim=embedding_dim, dropout=dropout)
         self.encoder_layers = nn.ModuleList([
-            EncoderLayerMoE(embedding_dim, dropout, n_heads) for _ in range(n_encoder_layers)
+            EncoderLayerMoE(embedding_dim, expert_dim, n_experts, dropout, n_heads) for _ in range(n_encoder_layers)
         ])
      
     def forward(self, x, padding_mask=None):
@@ -144,7 +145,7 @@ class EncoderMoE(nn.Module):
 # Decoder layer composed of experts
 class DecoderLayerMoE(nn.Module):
     
-    def __init__(self, embedding_dim=256, dropout=0.1, n_heads=4):
+    def __init__(self, embedding_dim=256, expert_dim=2048, n_experts=64, dropout=0.1, n_heads=4):
         """
         embedding_dim: Dimensionality of embeddings.
         droupout: Dropout probability.
@@ -162,7 +163,8 @@ class DecoderLayerMoE(nn.Module):
         self.norm2 = nn.LayerNorm(embedding_dim)
         
         self.ff = ExpertLayer(input_dim=embedding_dim, gating_dim=embedding_dim,
-                              expert_dim=embedding_dim, output_dim=embedding_dim)
+                              expert_dim=expert_dim, n_experts=n_experts,
+                              output_dim=embedding_dim)
         self.norm3 = nn.LayerNorm(embedding_dim)
         #self.dropout = nn.Dropout(dropout)
         
@@ -184,7 +186,7 @@ class DecoderLayerMoE(nn.Module):
 # Decoder composed of expert layers
 class DecoderMoE(nn.Module):
     
-    def __init__(self, vocab_size, embedding_dim=256, dropout=0.1, n_decoder_layers=4, n_heads=4):
+    def __init__(self, vocab_size, embedding_dim=256, expert_dim=2048, n_experts=64, dropout=0.1, n_decoder_layers=4, n_heads=4):
         """
         vocab_size: Size of dictionary of embeddings.
         embedding_dim: Dimensionality of embeddings.
@@ -230,6 +232,8 @@ class TransformerMoE(nn.Module):
         
         self.vocab_size = kwargs.get('vocab_size')
         self.embedding_dim = kwargs.get('embedding_dim')
+        self.expert_dim = kwargs.get('expert_dim')
+        self.n_experts = kwargs.get('n_experts')
         self.dropout = kwargs.get('dropout')
         self.n_encoder_layers = kwargs.get('n_encoder_layers')
         self.n_decoder_layers = kwargs.get('n_decoder_layers')
@@ -238,14 +242,16 @@ class TransformerMoE(nn.Module):
         self.PAD_IDX = kwargs.get('pad_idx', 0)
         
         #self.encoder = Encoder(
-        #    self.vocab_size, self.embedding_dim, self.dropout, self.n_encoder_layers, self.n_heads)
+        #    self.vocab_size, self.embedding_dim, self.n_experts*self.expert_dim, self.dropout, self.n_encoder_layers, self.n_heads)
         self.decoder = Decoder(
-            self.vocab_size, self.embedding_dim, self.dropout, self.n_decoder_layers, self.n_heads)
+            self.vocab_size, self.embedding_dim, self.n_experts*self.expert_dim, self.dropout, self.n_decoder_layers, self.n_heads)
 
         self.encoder = EncoderMoE(
-            self.vocab_size, self.embedding_dim, self.dropout, self.n_encoder_layers, self.n_heads)
+            self.vocab_size, self.embedding_dim, self.expert_dim, self.n_experts,
+            self.dropout, self.n_encoder_layers, self.n_heads)
         #self.decoder = DecoderMoE(
-        #    self.vocab_size, self.embedding_dim, self.dropout, self.n_decoder_layers, self.n_heads)
+        #    self.vocab_size, self.embedding_dim, self.expert_dim=expert_dim, self.n_experts=n_experts,
+        #    self.dropout, self.n_decoder_layers, self.n_heads)
         
         self.fc = nn.Linear(self.embedding_dim, self.vocab_size)
 

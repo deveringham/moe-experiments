@@ -170,7 +170,7 @@ class PositionWiseFeedForward(nn.Module):
 
 class EncoderLayer(nn.Module):
     
-    def __init__(self, embedding_dim=256, dropout=0.1, n_heads=4):
+    def __init__(self, embedding_dim=256, ff_dim=2048, dropout=0.1, n_heads=4):
         """
         embedding_dim: Dimensionality of embeddings.
         droupout: Dropout probability.
@@ -180,7 +180,7 @@ class EncoderLayer(nn.Module):
         super(EncoderLayer, self).__init__()
         self.mha = MultiHeadAttention(embedding_dim=embedding_dim, n_heads=n_heads)
         self.norm1 = nn.LayerNorm(embedding_dim)
-        self.ff = PositionWiseFeedForward(embedding_dim, embedding_dim, embedding_dim)
+        self.ff = PositionWiseFeedForward(embedding_dim, embedding_dim, ff_dim)
         self.norm2 = nn.LayerNorm(embedding_dim)
         self.dropout = nn.Dropout(dropout)
         
@@ -197,7 +197,7 @@ class EncoderLayer(nn.Module):
 
 class Encoder(nn.Module):
     
-    def __init__(self, vocab_size, embedding_dim=256, dropout=0.1, n_encoder_layers=4, n_heads=4):
+    def __init__(self, vocab_size, embedding_dim=256, ff_dim=2048, dropout=0.1, n_encoder_layers=4, n_heads=4):
         """
         vocab_size: Size of dictionary of embeddings.
         embedding_dim: Dimensionality of embeddings.
@@ -213,7 +213,7 @@ class Encoder(nn.Module):
         self.positional_encoding = PositionalEncoding(
             embedding_dim=embedding_dim, dropout=dropout)
         self.encoder_layers = nn.ModuleList([
-            EncoderLayer(embedding_dim, dropout, n_heads) for _ in range(n_encoder_layers)
+            EncoderLayer(embedding_dim, ff_dim, dropout, n_heads) for _ in range(n_encoder_layers)
         ])
      
     def forward(self, x, padding_mask=None):
@@ -227,7 +227,7 @@ class Encoder(nn.Module):
 
 class DecoderLayer(nn.Module):
     
-    def __init__(self, embedding_dim=256, dropout=0.1, n_heads=4):
+    def __init__(self, embedding_dim=256, ff_dim=2048, dropout=0.1, n_heads=4):
         """
         embedding_dim: Dimensionality of embeddings.
         droupout: Dropout probability.
@@ -244,7 +244,7 @@ class DecoderLayer(nn.Module):
         self.cross_attention = MultiHeadAttention(embedding_dim=embedding_dim, n_heads=n_heads)
         self.norm2 = nn.LayerNorm(embedding_dim)
         
-        self.ff = PositionWiseFeedForward(embedding_dim, embedding_dim, embedding_dim)
+        self.ff = PositionWiseFeedForward(embedding_dim, embedding_dim, ff_dim)
         self.norm3 = nn.LayerNorm(embedding_dim)
         #self.dropout = nn.Dropout(dropout)
         
@@ -266,7 +266,7 @@ class DecoderLayer(nn.Module):
 
 class Decoder(nn.Module):
     
-    def __init__(self, vocab_size, embedding_dim=256, dropout=0.1, n_decoder_layers=4, n_heads=4):
+    def __init__(self, vocab_size, embedding_dim=256, ff_dim=2048, dropout=0.1, n_decoder_layers=4, n_heads=4):
         """
         vocab_size: Size of dictionary of embeddings.
         embedding_dim: Dimensionality of embeddings.
@@ -282,7 +282,7 @@ class Decoder(nn.Module):
         self.positional_encoding = PositionalEncoding(
             embedding_dim=embedding_dim, dropout=dropout)
         self.decoder_layers = nn.ModuleList([
-            DecoderLayer(embedding_dim, dropout, n_heads) for _ in range(n_decoder_layers)])
+            DecoderLayer(embedding_dim, ff_dim, dropout, n_heads) for _ in range(n_decoder_layers)])
         
         
     def forward(self, tgt, memory, tgt_mask=None, tgt_padding_mask=None, memory_padding_mask=None):
@@ -312,6 +312,7 @@ class Transformer(nn.Module):
         
         self.vocab_size = kwargs.get('vocab_size')
         self.embedding_dim = kwargs.get('embedding_dim')
+        self.ff_dim = kwargs.get('ff_dim')
         self.dropout = kwargs.get('dropout')
         self.n_encoder_layers = kwargs.get('n_encoder_layers')
         self.n_decoder_layers = kwargs.get('n_decoder_layers')
@@ -320,9 +321,9 @@ class Transformer(nn.Module):
         self.PAD_IDX = kwargs.get('pad_idx', 0)
 
         self.encoder = Encoder(
-            self.vocab_size, self.embedding_dim, self.dropout, self.n_encoder_layers, self.n_heads)
+            self.vocab_size, self.embedding_dim, self.ff_dim, self.dropout, self.n_encoder_layers, self.n_heads)
         self.decoder = Decoder(
-            self.vocab_size, self.embedding_dim, self.dropout, self.n_decoder_layers, self.n_heads)
+            self.vocab_size, self.embedding_dim, self.ff_dim, self.dropout, self.n_decoder_layers, self.n_heads)
         self.fc = nn.Linear(self.embedding_dim, self.vocab_size)
         
 
