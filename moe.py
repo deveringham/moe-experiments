@@ -21,10 +21,10 @@ class GatingFuncTopK(nn.Module):
         self.k = k
 
     def forward(self, x):
-        outputs = self.fc(x) # [tokens, num_experts]
-        routing_weights = torch.softmax(outputs, dim=-1) # [tokens, num_experts]
-        topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [tokens, k]
-        sparse_routing_weights = torch.zeros_like(outputs).scatter(-1, topk_indices, routing_weights) # [tokens, num_experts]
+        outputs = self.fc(x) # [batch, seq_len, n_experts]
+        routing_weights = torch.softmax(outputs, dim=-1) # [batch, seq_len, n_experts]
+        topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
+        sparse_routing_weights = torch.zeros_like(outputs).scatter(-1, topk_indices, topk_vals) # [batch, seq_len, n_experts]
         #load_balancing_loss = LoadBalancingLoss(routing_weights, sparse_routing_weights)
         #z_loss = ZLoss(outputs)
         return sparse_routing_weights#, load_balancing_loss, z_loss
@@ -52,13 +52,9 @@ class ExpertLayer(nn.Module):
         self.layer_norm = nn.LayerNorm(output_dim)
         
     def forward(self, x):
-        #print(f"x: {x.size()}")
         sparse_routing_weights = self.gating_func(x) # [batch, seq_len, n_experts]
-        #print(f"sparse_routing_weights: {sparse_routing_weights.size()}")
         expert_outputs = torch.stack([e(x) for e in self.experts], dim=-1) # [batch, seq_len, ouput_dim, n_experts]
-        #print(f"expert_outputs: {expert_outputs.size()}")
         output = (sparse_routing_weights.unsqueeze(2) * expert_outputs).sum(dim=-1) # [batch, seq_len, output_dim]
-        #print(f"output: {output.size()}")
         output = output + x # Residual connection
         output = self.layer_norm(output) # Post-layer normalization
         return output#, load_balancing_loss, z_loss
@@ -288,7 +284,7 @@ class TransformerMoE(nn.Module):
             tgt_padding_mask=tgt_padding_mask, 
             memory_padding_mask=memory_padding_mask
         )  
-        output = self.fc(decoder_output)  # shape (B, L, C)
+        output = self.fc(decoder_output)
         return output
 
     def forward(self, x, y):
@@ -297,16 +293,11 @@ class TransformerMoE(nn.Module):
         y: tensor of shape [batch, tgt_seq_len, embedding_dim]
         """
         
-        print(f"x: {x.size()}")
-        print(f"y: {y.size()}")
-        
         # Encoder output shape [batch, src_seq_len, embedding_dim]
         encoder_output, encoder_padding_mask = self.encode(x)
-        print(f"encoder_output: {encoder_output.size()}")
 
         # Decoder output shape [batch, tgt_seq_len, embedding_dim]
         decoder_output = self.decode(tgt=y, memory=encoder_output, 
             memory_padding_mask=encoder_padding_mask)
-        print(f"decoder_output: {decoder_output.size()}")
         
         return decoder_output

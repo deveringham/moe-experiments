@@ -372,17 +372,12 @@ class Transformer(nn.Module):
         y: tensor of shape [batch, tgt_seq_len, embedding_dim]
         """
         
-        print(f"x: {x.size()}")
-        print(f"y: {y.size()}")
-        
         # Encoder output shape [batch, src_seq_len, embedding_dim]
         encoder_output, encoder_padding_mask = self.encode(x)
-        print(f"encoder_output: {encoder_output.size()}")
 
         # Decoder output shape [batch, tgt_seq_len, embedding_dim]
         decoder_output = self.decode(tgt=y, memory=encoder_output, 
             memory_padding_mask=encoder_padding_mask
         )
-        print(f"decoder_output: {decoder_output.size()}")
         
         return decoder_output

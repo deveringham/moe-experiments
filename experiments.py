@@ -129,7 +129,6 @@ def train(model, optimizer, loader, loss_fn, epoch):
             optimizer.zero_grad()
             logits = model(x, y[:, :-1])
             loss = loss_fn(logits.contiguous().view(-1, model.vocab_size), y[:, 1:].contiguous().view(-1))
-            print(f"loss: {loss.size()}")
             loss.backward()
             optimizer.step()
             losses += loss.item()

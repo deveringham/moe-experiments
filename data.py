@@ -36,8 +36,6 @@ def collate_fn(batch):
 
     src_batch = pad_sequence(src_batch, padding_value=PAD_IDX, batch_first=True)
     tgt_batch = pad_sequence(tgt_batch, padding_value=PAD_IDX, batch_first=True)
-    print(f"src_batch: {src_batch.size()}")
-    print(f"tgt_batch: {tgt_batch.size()}")
     return src_batch, tgt_batch
 
 
