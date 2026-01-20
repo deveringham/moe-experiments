@@ -30,25 +30,41 @@ class MoEProbe:
     def hook_fn(self, module, inputs, outputs):
         
         # outputs are the raw logits [batch, seq_len, num_experts]
-        router_logits = outputs
+        # discard load balancing loss, z loss
+        router_logits, _, _ = outputs
         
-        # Calculate probabilities
-        probs = torch.softmax(router_logits, dim=-1)
+        # Recalculate expert activations
+        routing_weights = torch.softmax(router_logits, dim=-1) # [batch, seq_len, n_experts]
+        topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
+        sparse_routing_weights = torch.zeros_like(router_logits).scatter(-1, topk_indices, topk_vals) # [batch, seq_len, n_experts]
+        
+        # Take mean along seq_len dimension
+        routing_weights = torch.mean(routing_weights, dim=1) # [batch, n_experts]
+        sparse_routing_weights = torch.mean(sparse_routing_weights, dim=1) # [batch, n_experts]
+        
+        # f_i: fraction of tokens routed to each expert
+        expert_mask = torch.ceil(sparse_routing_weights) # [batch, n_experts]
+        tokens_per_expert = torch.mean(expert_mask, dim=0) # [n_experts]
+
+        # P_i: mean router probability over tokens for each expert
+        router_prob_per_expert = torch.mean(routing_weights, dim=0) # [n_experts]
         
         # Metric: Router Entropy (Uncertainty)
         # High entropy = Router is unsure (or load balancing is forcing uniformity)
         # Low entropy = Strong specialization
-        entropy = -torch.sum(probs * torch.log(probs + 1e-9), dim=-1).mean()
+        entropy = -torch.mean(router_prob_per_expert * torch.log(router_prob_per_expert + 1e-9))
         
         # Metric: Expert Activation (Load)
-        # Manually recalculate Top-K to see which experts won
-        topk_weights, topk_indices = torch.topk(probs, self.k, dim=-1)
+        #print(f"topk_indices: {topk_indices.size()}")
+        active_experts = topk_indices.flatten().numpy().tolist()
+        #print(f"active_experts: {len(active_experts)}")
         
-        # Store lightweight statistics (move to CPU to save VRAM)
+        
+        # Store lightweight statistics
         step_data = {
             "layer": self.layer_names[module],
             "entropy": entropy.item(),
-            "active_experts": topk_indices.flatten().cpu().numpy().tolist()
+            "active_experts": active_experts
         }
         self.logs.append(step_data)
         
@@ -83,9 +99,11 @@ class MoEProbe:
         counts = Counter(all_indices)
         avg_entropy = np.mean(all_entropies)
         expert_ids = np.array(sorted(counts.keys()))
-        counts_per_token = np.array([counts[i] for i in expert_ids])
+        #print(expert_ids)
+        count_per_expert = np.array([counts[i] for i in expert_ids])
+        #print(count_per_expert)
         tokens = counts.total()
-        freqs = counts_per_token / tokens
+        freqs = count_per_expert / tokens
         ax.bar(expert_ids, freqs, \
                 label='tokens: %d entropy: %2.4f' % (tokens, avg_entropy), \
                 alpha=0.7)
@@ -93,7 +111,7 @@ class MoEProbe:
 
         ax.set_title("Expert Activation Frequency (Load)")
         ax.set_xlabel(f"Expert Index (0-{n_experts})")
-        ax.set_ylabel("Activation Count")
+        ax.set_ylabel("Activation Frequency")
         ax.legend()
         ax.grid(True, alpha=0.3)
         plt.tight_layout()

@@ -75,7 +75,7 @@ class ReverseDataset(Dataset):
         return torch.tensor([self.sos_idx] + [ord(z)-97+3 for z in x] + [self.eos_idx])
 
     
-# Functions to fetch DataLoaders
+# Functions to fetch DataLoaders and tokenizers
 
 def get_dataloader_reverse(n_samples, batch_size):
     
