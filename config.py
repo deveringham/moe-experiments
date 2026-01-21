@@ -25,9 +25,13 @@ expert_dim = ff_dim//n_experts # Hidden dimension of expert FFNs
 n_samples_val = 1000
 n_samples_train = n_samples_val*5
 n_samples_test = n_samples_val
-w_cse = 1.0 # Weight of cross entropy loss term
-w_lbl = 0.0 # Weight of load balancing loss term
-w_z = 0.0 # Weight of z loss term
+
+# Dictionary containing names and weights of auxiliary loss terms
+# which we care to track
+auxiliary_losses = {
+    "loss_load_balancing": 0.1,
+    "loss_z": 0.0
+}
 
 # Device selection
 device = 'cuda' if torch.cuda.is_available() else 'cpu'

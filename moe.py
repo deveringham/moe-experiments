@@ -11,8 +11,37 @@ import torch
 import torch.nn as nn
 from basic_transformer import *
 
+# Helper class for collecting and accessing auxilliary loss calculations
+class AuxLossMixin:
+    # Each auxiliary loss should have a name and a calculated value
+    # Store these as a dict
+    def __init__(self, *args, **kwargs):
+        # Forward all unused arguments
+        super().__init__(*args, **kwargs)
+        self.losses = {}
+    
+    def get_aux_loss(self, name):
+        if name in self.losses:
+            return self.losses[name]
+        else:
+            return torch.zeros(1)
+    def set_aux_loss(self, name, value):
+        self.losses[name] = value
+    def clear_aux_losses(self):
+        self.losses = {}
+
+# Aggregator functions for collecting auxiliary loss calculations
+# from large model architectures composed of one or more of the
+# modules defined above
+def collect_aux_loss(model, loss_name):
+    total = torch.zeros(1)
+    for module in model.modules():
+        if isinstance(module, AuxLossMixin):
+            total += module.get_aux_loss(loss_name)
+    return total
+
 # Gating function with Top-K routing
-class GatingFuncTopK(nn.Module):
+class GatingFuncTopK(AuxLossMixin, nn.Module):
     def __init__(self, input_dim=512, num_experts=64, k=2):
         super(GatingFuncTopK, self).__init__()
         
@@ -25,9 +54,11 @@ class GatingFuncTopK(nn.Module):
         routing_weights = torch.softmax(outputs, dim=-1) # [batch, seq_len, n_experts]
         topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
         sparse_routing_weights = torch.zeros_like(outputs).scatter(-1, topk_indices, topk_vals) # [batch, seq_len, n_experts]
-        load_balancing_loss = LoadBalancingLoss(routing_weights, sparse_routing_weights)
-        z_loss = ZLoss(outputs)
-        return sparse_routing_weights, load_balancing_loss, z_loss
+        
+        # Update auxilliary loss calculations
+        self.set_aux_loss("loss_load_balancing", LoadBalancingLoss(routing_weights, sparse_routing_weights))
+        self.set_aux_loss("loss_z", ZLoss(outputs))
+        return sparse_routing_weights
 
 # Simple implementation of an expert as a FFN
 class ExpertFFN(nn.Module):
@@ -52,12 +83,12 @@ class ExpertLayer(nn.Module):
         self.layer_norm = nn.LayerNorm(output_dim)
         
     def forward(self, x):
-        sparse_routing_weights, load_balancing_loss, z_loss = self.gating_func(x) # [batch, seq_len, n_experts]
+        sparse_routing_weights = self.gating_func(x) # [batch, seq_len, n_experts]
         expert_outputs = torch.stack([e(x) for e in self.experts], dim=-1) # [batch, seq_len, ouput_dim, n_experts]
         output = (sparse_routing_weights.unsqueeze(2) * expert_outputs).sum(dim=-1) # [batch, seq_len, output_dim]
         output = output + x # Residual connection
         output = self.layer_norm(output) # Post-layer normalization
-        return output, load_balancing_loss, z_loss
+        return output
 
 # Load balancing loss term
 # Penalizes large fractions of tokens being sent to one expert
@@ -125,9 +156,9 @@ class EncoderLayerMoE(nn.Module):
         att_output = self.mha(x, x, x, key_padding_mask=src_padding_mask)
         x = x + self.dropout(self.norm1(att_output))
         
-        ff_output, load_balancing_loss, z_loss = self.ff(x)
+        ff_output = self.ff(x)
         output = x + self.norm2(ff_output)
-        return output, load_balancing_loss, z_loss
+        return output
 
 # Encoder composed of expert layers
 class EncoderMoE(nn.Module):
@@ -156,8 +187,8 @@ class EncoderMoE(nn.Module):
         x = self.embedding(x) * math.sqrt(self.embedding_dim)
         x = self.positional_encoding(x)
         for layer in self.encoder_layers:
-            x, load_balancing_loss, z_loss = layer(x=x, src_padding_mask=padding_mask)
-        return x, load_balancing_loss, z_loss
+            x = layer(x=x, src_padding_mask=padding_mask)
+        return x
 
 # Decoder layer composed of experts
 class DecoderLayerMoE(nn.Module):
@@ -196,9 +227,9 @@ class DecoderLayerMoE(nn.Module):
             q=x1, k=memory, v=memory, attention_mask=None, key_padding_mask=memory_padding_mask)
         x2 = x1 + self.norm2(cross_att_output)
         
-        ff_output, load_balancing_loss, z_loss = self.ff(x2) # Capture loss?
+        ff_output = self.ff(x2)
         output = x2 + self.norm3(ff_output)
-        return output, load_balancing_loss, z_loss
+        return output
 
 # Decoder composed of expert layers
 class DecoderMoE(nn.Module):
@@ -228,9 +259,9 @@ class DecoderMoE(nn.Module):
         x = self.positional_encoding(x)
 
         for layer in self.decoder_layers:
-            x, load_balancing_loss, z_loss = layer(x, memory, tgt_mask=tgt_mask, tgt_padding_mask=tgt_padding_mask, 
+            x = layer(x, memory, tgt_mask=tgt_mask, tgt_padding_mask=tgt_padding_mask, 
                 memory_padding_mask=memory_padding_mask)
-        return x, load_balancing_loss, z_loss
+        return x
 
 # Basic transformer model modified to include expert layers in both encoder and decoder
 class TransformerMoE(nn.Module):
@@ -290,25 +321,26 @@ class TransformerMoE(nn.Module):
         mask = (x == self.PAD_IDX).float()
         encoder_padding_mask = mask.masked_fill(mask == 1, float('-inf'))
         
-        encoder_output, load_balancing_loss, z_loss = self.encoder(x, padding_mask=encoder_padding_mask)  
-        return encoder_output, encoder_padding_mask, load_balancing_loss, z_loss
+        encoder_output = self.encoder(x, padding_mask=encoder_padding_mask)  
+        return encoder_output, encoder_padding_mask
     
     def decode(self, tgt, memory, memory_padding_mask=None):
         """
-        encoded_x: tensor of shape [batch, src_seq_len, embedding_dim]
-        y: tensor of shape [batch, tgt_seq_len, embedding_dim]
+        tgt: tensor of shape [batch, src_seq_len, embedding_dim]
+        memory: tensor of shape [batch, tgt_seq_len, embedding_dim]
+        memory_padding_mask: tensor of shape [batch, tgt_seq_len, embedding_dim]
         """
         
         mask = (tgt == self.PAD_IDX).float()
         tgt_padding_mask = mask.masked_fill(mask == 1, float('-inf'))
 
-        decoder_output, load_balancing_loss, z_loss = self.decoder(tgt=tgt, memory=memory, 
+        decoder_output = self.decoder(tgt=tgt, memory=memory, 
             tgt_mask=self.generate_square_subsequent_mask(tgt.size(1)), 
             tgt_padding_mask=tgt_padding_mask, 
             memory_padding_mask=memory_padding_mask
         )  
         output = self.fc(decoder_output)
-        return output, load_balancing_loss, z_loss
+        return output
 
     def forward(self, x, y):
         """
@@ -317,10 +349,10 @@ class TransformerMoE(nn.Module):
         """
         
         # Encoder output shape [batch, src_seq_len, embedding_dim]
-        encoder_output, encoder_padding_mask, load_balancing_loss, z_loss = self.encode(x)
+        encoder_output, encoder_padding_mask = self.encode(x)
 
         # Decoder output shape [batch, tgt_seq_len, embedding_dim]
-        decoder_output, load_balancing_loss, z_loss = self.decode(tgt=y, memory=encoder_output, 
+        decoder_output = self.decode(tgt=y, memory=encoder_output, 
             memory_padding_mask=encoder_padding_mask)
         
-        return decoder_output, load_balancing_loss, z_loss
+        return decoder_output

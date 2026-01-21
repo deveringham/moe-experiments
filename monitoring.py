@@ -30,8 +30,7 @@ class MoEProbe:
     def hook_fn(self, module, inputs, outputs):
         
         # outputs are the raw logits [batch, seq_len, num_experts]
-        # discard load balancing loss, z loss
-        router_logits, _, _ = outputs
+        router_logits = outputs
         
         # Recalculate expert activations
         routing_weights = torch.softmax(router_logits, dim=-1) # [batch, seq_len, n_experts]
