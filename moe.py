@@ -41,6 +41,7 @@ def collect_aux_loss(model, loss_name):
     return total
 
 # Gating function with Top-K routing
+# Mask may be included to exclude padding tokens, etc.
 class GatingFuncTopK(AuxLossMixin, nn.Module):
     def __init__(self, input_dim=512, num_experts=64, k=2):
         super(GatingFuncTopK, self).__init__()
@@ -49,14 +50,14 @@ class GatingFuncTopK(AuxLossMixin, nn.Module):
         self.fc = nn.Linear(input_dim, num_experts)
         self.k = k
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         outputs = self.fc(x) # [batch, seq_len, n_experts]
         routing_weights = torch.softmax(outputs, dim=-1) # [batch, seq_len, n_experts]
         topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
         sparse_routing_weights = torch.zeros_like(outputs).scatter(-1, topk_indices, topk_vals) # [batch, seq_len, n_experts]
         
-        # Update auxilliary loss calculations
-        self.set_aux_loss("loss_load_balancing", LoadBalancingLoss(routing_weights, sparse_routing_weights))
+        # Update auxiliary loss calculations
+        self.set_aux_loss("loss_load_balancing", LoadBalancingLoss(routing_weights, sparse_routing_weights, mask=mask))
         self.set_aux_loss("loss_z", ZLoss(outputs))
         return sparse_routing_weights
 
@@ -74,6 +75,7 @@ class ExpertFFN(nn.Module):
         return self.fc2(x) # [batch, seq_len, output_dim]
 
 # Single expert layer composed of experts and a gating function
+# Mask may be included to exclude padding tokens
 class ExpertLayer(nn.Module):
     def __init__(self, input_dim=512, gating_dim=512, expert_dim=2048, n_experts=64, output_dim=512, k=1):
         super(ExpertLayer, self).__init__()
@@ -82,8 +84,8 @@ class ExpertLayer(nn.Module):
             [ExpertFFN(input_dim, expert_dim, output_dim) for _ in range(n_experts)])
         self.layer_norm = nn.LayerNorm(output_dim)
         
-    def forward(self, x):
-        sparse_routing_weights = self.gating_func(x) # [batch, seq_len, n_experts]
+    def forward(self, x, mask=None):
+        sparse_routing_weights = self.gating_func(x, mask) # [batch, seq_len, n_experts]
         expert_outputs = torch.stack([e(x) for e in self.experts], dim=-1) # [batch, seq_len, ouput_dim, n_experts]
         output = (sparse_routing_weights.unsqueeze(2) * expert_outputs).sum(dim=-1) # [batch, seq_len, output_dim]
         output = output + x # Residual connection
@@ -93,33 +95,32 @@ class ExpertLayer(nn.Module):
 # Load balancing loss term
 # Penalizes large fractions of tokens being sent to one expert
 # or large routing probabilities
-def LoadBalancingLoss(routing_weights, sparse_routing_weights):
+# Mask may be included to exclude padding tokens
+def LoadBalancingLoss(routing_weights, sparse_routing_weights, mask=None):
     
     # All routing weights used for computations for probability per expert,
     # but only top-k experts contribute to token selection fraction
-    # Inputs are [batch, seq_len, n_experts]
+    # routing_weights are [batch, seq_len, n_experts]
+    # mask is [batch, seq_len]
     
-    # Take mean along seq_len dimension
-    routing_weights = torch.mean(routing_weights, dim=1)
-    sparse_routing_weights = torch.mean(sparse_routing_weights, dim=1)
-    
-    #print(f"routing_weights: {routing_weights.size()}")
-    #print(f"sparse_routing_weights: {sparse_routing_weights.size()}")
+    if mask is not None:
+        # Expand mask to match expert dimension
+        mask = mask.unsqueeze(-1)
+        
+        # Zero out contributions from padding tokens
+        routing_weights = routing_weights * mask
+        sparse_routing_weights = sparse_routing_weights * mask
+        
+    # Flatten along seq_len dimension
+    routing_weights = routing_weights.view(-1, routing_weights.size(-1)) # [batch*seq_len, n_experts]
+    routing_weights = sparse_routing_weights.view(-1, sparse_routing_weights.size(-1)) # [batch*seq_len, n_experts]
     
     # f_i: fraction of tokens routed to each expert
-    expert_mask = torch.ceil(sparse_routing_weights) # [tokens, n_experts]
+    expert_mask = torch.ceil(sparse_routing_weights) # [batch*seq_len, n_experts]
     tokens_per_expert = torch.mean(expert_mask, dim=0) # [n_experts]
     
     # P_i: mean router probability over tokens for each expert
     router_prob_per_expert = torch.mean(routing_weights, dim=0) # [n_experts]
-    
-    #tpe_values, tpe_indices = torch.topk(tokens_per_expert, 2, dim=0)
-    #rppe_values, rppe_indices = torch.topk(router_prob_per_expert, 2, dim=0)
-    
-    #print(f"tpe_indices: {tpe_indices.size()}")
-    #print(f"rppe_indices: {rppe_indices.size()}")
-    #print(f"Top Experts in Routing: {tpe_indices}")
-    #print(f"Top Experts in Prob: {rppe_indices}")
     
     # L = N * Σ(f_i * P_i)
     loss = torch.sum(tokens_per_expert * router_prob_per_expert) * expert_mask.size(dim=1)
@@ -156,7 +157,15 @@ class EncoderLayerMoE(nn.Module):
         att_output = self.mha(x, x, x, key_padding_mask=src_padding_mask)
         x = x + self.dropout(self.norm1(att_output))
         
-        ff_output = self.ff(x)
+        # For MHA we need an additive mask (i.e. 0s and -infs)
+        # But to handle padding tokens in the expert layers we need a multiplicative mask (i.e. 1s and 0s)
+        # Convert here
+        if src_padding_mask is not None:
+            mult_mask = (src_padding_mask == 0.0).float()
+        else:
+            mult_mask = None
+        
+        ff_output = self.ff(x, mask=mult_mask)
         output = x + self.norm2(ff_output)
         return output
 
@@ -182,12 +191,12 @@ class EncoderMoE(nn.Module):
             EncoderLayerMoE(embedding_dim, expert_dim, n_experts, dropout, n_heads) for _ in range(n_encoder_layers)
         ])
      
-    def forward(self, x, padding_mask=None):
+    def forward(self, x, src_padding_mask=None):
         
         x = self.embedding(x) * math.sqrt(self.embedding_dim)
         x = self.positional_encoding(x)
         for layer in self.encoder_layers:
-            x = layer(x=x, src_padding_mask=padding_mask)
+            x = layer(x=x, src_padding_mask=src_padding_mask)
         return x
 
 # Decoder layer composed of experts
@@ -227,7 +236,16 @@ class DecoderLayerMoE(nn.Module):
             q=x1, k=memory, v=memory, attention_mask=None, key_padding_mask=memory_padding_mask)
         x2 = x1 + self.norm2(cross_att_output)
         
-        ff_output = self.ff(x2)
+        
+        # For MHA we need an additive mask (i.e. 0s and -infs)
+        # But to handle padding tokens in the expert layers we need a multiplicative mask (i.e. 1s and 0s)
+        # Convert here
+        if tgt_mask is not None:
+            mult_mask = (tgt_padding_mask == 0.0).float()
+        else:
+            mult_mask = None
+        
+        ff_output = self.ff(x2, mask=mult_mask)
         output = x2 + self.norm3(ff_output)
         return output
 
@@ -319,16 +337,16 @@ class TransformerMoE(nn.Module):
         """
 
         mask = (x == self.PAD_IDX).float()
-        encoder_padding_mask = mask.masked_fill(mask == 1, float('-inf'))
+        encoder_mask = mask.masked_fill(mask == 1, float('-inf'))
         
-        encoder_output = self.encoder(x, padding_mask=encoder_padding_mask)  
-        return encoder_output, encoder_padding_mask
+        encoder_output = self.encoder(x, src_padding_mask=encoder_mask)
+        return encoder_output, encoder_mask
     
     def decode(self, tgt, memory, memory_padding_mask=None):
         """
         tgt: tensor of shape [batch, src_seq_len, embedding_dim]
         memory: tensor of shape [batch, tgt_seq_len, embedding_dim]
-        memory_padding_mask: tensor of shape [batch, tgt_seq_len, embedding_dim]
+        memory_mask: tensor of shape [batch, tgt_seq_len, embedding_dim]
         """
         
         mask = (tgt == self.PAD_IDX).float()
@@ -349,10 +367,10 @@ class TransformerMoE(nn.Module):
         """
         
         # Encoder output shape [batch, src_seq_len, embedding_dim]
-        encoder_output, encoder_padding_mask = self.encode(x)
+        encoder_output, encoder_mask = self.encode(x)
 
         # Decoder output shape [batch, tgt_seq_len, embedding_dim]
         decoder_output = self.decode(tgt=y, memory=encoder_output, 
-            memory_padding_mask=encoder_padding_mask)
+            memory_padding_mask=encoder_mask)
         
         return decoder_output
