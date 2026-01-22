@@ -3,7 +3,7 @@
 #
 # Classes for monitoring experiments.
 # Dylan Everingham
-# 12.12.2025
+# 22.01.2026
 ###
 
 # Dependencies
@@ -78,11 +78,10 @@ class MoEProbe:
         active_experts = topk_indices.flatten().cpu().numpy().tolist()
         
         # Check active experts.
-        counts = Counter(active_experts)
-        expert_ids = np.array(sorted(counts.keys()))
-        count_per_expert = np.array([counts[i] for i in expert_ids])
-        top_indices = np.argpartition(count_per_expert, -2)[-2:]
-        top_experts = expert_ids[top_indices]
+        #expert_ids = np.array(sorted(counts.keys()))
+        #count_per_expert = np.array([counts[i] for i in expert_ids])
+        #top_indices = np.argpartition(count_per_expert, -2)[-2:]
+        #top_experts = expert_ids[top_indices]
         #print(f"top experts: {top_experts}")
         
         

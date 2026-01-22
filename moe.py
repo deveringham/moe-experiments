@@ -3,7 +3,7 @@
 #
 # Definition of basic Mixture-of-Experts (MoE) architecture components.
 # Dylan Everingham
-# 09.12.2025
+# 22.01.2026
 ###
 
 # Dependencies
