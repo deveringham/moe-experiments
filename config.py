@@ -22,14 +22,14 @@ n_epoch = 1
 n_experts = 64
 ff_dim = 2048 # Hidden dimension of FFNs in basic Transformer
 expert_dim = ff_dim//n_experts # Hidden dimension of expert FFNs
-n_samples_val = 100
+n_samples_val = 1000
 n_samples_train = n_samples_val*5
 n_samples_test = n_samples_val
 
 # Dictionary containing names and weights of auxiliary loss terms
 # which we care to track
 auxiliary_losses = {
-    "loss_load_balancing": 0.1,
+    "loss_load_balancing": 0.3,
     "loss_z": 0.0
 }
 

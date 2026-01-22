@@ -30,45 +30,52 @@ class MoEProbe:
     def hook_fn(self, module, inputs, outputs):
         
         # outputs are the raw logits [batch, seq_len, num_experts]
-        router_logits = outputs
         
-        # Recalculate expert activations
-        routing_weights = torch.softmax(router_logits, dim=-1) # [batch, seq_len, n_experts]
+        
+        # Access expert activations, topk
+        #routing_weights = torch.softmax(router_logits, dim=-1) # [batch, seq_len, n_experts]
+        routing_weights = module.routing_weights
+        sparse_routing_weights = module.sparse_routing_weights
+        topk_indices = module.topk_indices
+        topk_vals = module.topk_vals
         
         # If padding mask is included in gating func module, use to to calculate statistics
         # only over non-padding tokens
-        if len(inputs) > 1:
-            mask = inputs[1]
-        if mask is not None:
+        #if len(inputs) > 1:
+        #    mask = inputs[1]
+        #if mask is not None:
             
             # Expand mask to match expert dimension
-            mask = mask.unsqueeze(-1)
+            #mask = mask.unsqueeze(-1)
             
             # Zero out contributions from padding tokens
-            routing_weights = routing_weights * mask
+            #routing_weights = routing_weights * mask
             
             # Flatten along seq_len dimension
-            routing_weights = routing_weights.view(-1, routing_weights.size(-1)) # [batch*seq_len, n_experts]
-            mask = mask.view(-1, mask.size(-1)) # [batch*seq_len, 1]
+            #routing_weights = routing_weights.view(-1, routing_weights.size(-1)) # [batch*seq_len, n_experts]
+            #mask = mask.view(-1, mask.size(-1)) # [batch*seq_len, 1]
             
             # Calculate top K over sequence using non-padding tokens only
-            topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch*seq_len, k] (both)
+            #topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch*seq_len, k] (both)
             
             # Metric: expert activation (load)
             # Track active experts only for non-padding tokens
-            non_padding_indices = topk_indices[mask.expand(-1, self.k).bool()]
-            active_experts = non_padding_indices.flatten().cpu().numpy().tolist()
+            #non_padding_indices = topk_indices[mask.expand(-1, self.k).bool()]
+            #active_experts = non_padding_indices.flatten().cpu().numpy().tolist()
         
-        else:
+        #else:
             
             # Flatten along seq_len dimension
-            routing_weights = routing_weights.view(-1, routing_weights.size(-1)) # [batch*seq_len, n_experts]
+            #routing_weights = routing_weights.view(-1, routing_weights.size(-1)) # [batch*seq_len, n_experts]
             
             # Calculate statistics over all tokens
-            topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
+            #topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
             
             # Metric: expert activation (load)
-            active_experts = topk_indices.flatten().cpu().numpy().tolist()
+            #active_experts = topk_indices.flatten().cpu().numpy().tolist()
+        
+        # Metric: expert activation (load)
+        active_experts = topk_indices.flatten().cpu().numpy().tolist()
         
         # Check active experts.
         counts = Counter(active_experts)

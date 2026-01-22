@@ -45,21 +45,28 @@ def collect_aux_loss(model, loss_name):
 class GatingFuncTopK(AuxLossMixin, nn.Module):
     def __init__(self, input_dim=512, num_experts=64, k=2):
         super(GatingFuncTopK, self).__init__()
+        self.k = k
         
         # The function itself is a simple linear layer
         self.fc = nn.Linear(input_dim, num_experts)
-        self.k = k
 
     def forward(self, x, mask=None):
+        
         outputs = self.fc(x) # [batch, seq_len, n_experts]
-        routing_weights = torch.softmax(outputs, dim=-1) # [batch, seq_len, n_experts]
-        topk_vals, topk_indices = torch.topk(routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
-        sparse_routing_weights = torch.zeros_like(outputs).scatter(-1, topk_indices, topk_vals) # [batch, seq_len, n_experts]
+        
+        # As a test, try assigning all inputs to one expert.
+        #outputs = torch.zeros_like(outputs)
+        #outputs[:, :, 0] = 1.0
+        
+        # Save routing weights, topk for monitoring purposes
+        self.routing_weights = torch.softmax(outputs, dim=-1) # [batch, seq_len, n_experts]
+        self.topk_vals, self.topk_indices = torch.topk(self.routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
+        self.sparse_routing_weights = torch.zeros_like(outputs).scatter(-1, self.topk_indices, self.topk_vals) # [batch, seq_len, n_experts]
         
         # Update auxiliary loss calculations
-        self.set_aux_loss("loss_load_balancing", LoadBalancingLoss(routing_weights, sparse_routing_weights, mask=mask))
+        self.set_aux_loss("loss_load_balancing", LoadBalancingLoss(self.routing_weights, self.sparse_routing_weights, mask=mask))
         self.set_aux_loss("loss_z", ZLoss(outputs))
-        return sparse_routing_weights
+        return self.sparse_routing_weights
 
 # Simple implementation of an expert as a FFN
 class ExpertFFN(nn.Module):
@@ -103,24 +110,24 @@ def LoadBalancingLoss(routing_weights, sparse_routing_weights, mask=None):
     # routing_weights are [batch, seq_len, n_experts]
     # mask is [batch, seq_len]
     
-    if mask is not None:
+    #if mask is not None:
         # Expand mask to match expert dimension
-        mask = mask.unsqueeze(-1)
+        #mask = mask.unsqueeze(-1)
         
         # Zero out contributions from padding tokens
-        routing_weights = routing_weights * mask
-        sparse_routing_weights = sparse_routing_weights * mask
+        #routing_weights = routing_weights * mask
+        #sparse_routing_weights = sparse_routing_weights * mask
         
     # Flatten along seq_len dimension
-    routing_weights = routing_weights.view(-1, routing_weights.size(-1)) # [batch*seq_len, n_experts]
-    routing_weights = sparse_routing_weights.view(-1, sparse_routing_weights.size(-1)) # [batch*seq_len, n_experts]
+    routing_weights_flat = routing_weights.view(-1, routing_weights.size(-1)) # [batch*seq_len, n_experts]
+    sparse_routing_weights_flat = sparse_routing_weights.view(-1, sparse_routing_weights.size(-1)) # [batch*seq_len, n_experts]
     
     # f_i: fraction of tokens routed to each expert
-    expert_mask = torch.ceil(sparse_routing_weights) # [batch*seq_len, n_experts]
+    expert_mask = torch.ceil(sparse_routing_weights_flat) # [batch*seq_len, n_experts]
     tokens_per_expert = torch.mean(expert_mask, dim=0) # [n_experts]
     
     # P_i: mean router probability over tokens for each expert
-    router_prob_per_expert = torch.mean(routing_weights, dim=0) # [n_experts]
+    router_prob_per_expert = torch.mean(routing_weights_flat, dim=0) # [n_experts]
     
     # L = N * Σ(f_i * P_i)
     loss = torch.sum(tokens_per_expert * router_prob_per_expert) * expert_mask.size(dim=1)
