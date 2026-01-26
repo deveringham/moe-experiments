@@ -198,31 +198,29 @@ def get_dataloader_reverse(n_samples, batch_size):
 def generate_text(model, tokenizer, start_context="", max_length=4, context_size=4):
     
     model.eval()
-    
-    indices = tokenizer.encode(start_context)
-    start_context_len = len(indices)
-    indices = torch.tensor(indices).unsqueeze(0)
-    
     vocab = tokenizer.get_vocab()
     sos_idx = vocab[SOS_TOK]
     eos_idx = vocab[EOS_TOK]
     
+    indices = tokenizer.encode(start_context)
+    start_context_len = len(indices)
+    indices = [sos_idx] + indices + [eos_idx] # add SOS and EOS tokens
+    indices = torch.tensor(indices).unsqueeze(0) # [1, seq_len]
+    
     x = indices
-    encoder_output, mask = model.encode(x) # [batch_size, seq_len, embedding_dim]
+    encoder_output, encoder_padding_mask = model.encode(x) # [1, seq_len, embedding_dim]
     
+    generated_tokens = []
+    y = torch.tensor([[sos_idx]]).type_as(x) # Start with only [SOS] as the decoder input
     
-    outputs = torch.ones((x.size()[0], start_context_len+max_length)).type_as(x).long() * sos_idx
-    outputs[:, :start_context_len] = x
-    
-    for step in range(max_length):
+    for step in range(1, max_length):
         
-        y = outputs[:, :start_context_len+step+1]
-        probs = model.decode(y, encoder_output)
-        output = torch.argmax(probs, dim=-1)
-        print(f"Knowing \"{tokenizer.decode(y.squeeze(0).tolist()[:-1])}\" we output \"{tokenizer.decode(output[:, -1].tolist())}\"")
-        outputs[:, start_context_len+step] = output[:, -1]
-        if output[:, -1].detach().numpy() in (eos_idx, sos_idx):
+        logits = model.decode(tgt=y, memory=encoder_output, memory_padding_mask=encoder_padding_mask)
+        predicted_idx = torch.argmax(logits[:, -1, :], dim=-1).item()
+        generated_tokens.append(predicted_idx)
+        y = torch.cat([y, torch.tensor([[predicted_idx]]).type_as(y)], dim=1)
+        if predicted_idx is eos_idx:
             break
-
-    output_text = tokenizer.decode(outputs.squeeze(0).tolist())
+    
+    output_text = tokenizer.decode(generated_tokens)
     return output_text
