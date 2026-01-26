@@ -123,7 +123,7 @@ class MoEProbe:
     def print_count(self):
         print(f"MoEProbe: Captured {len(self.logs)} routing events.")
     
-    def plot_loadbalance(self):
+    def plot_loadbalance(self, wandb_run=None):
         fig, ax = plt.subplots(1, 1, figsize=(10, 5))
 
         # Collate data
@@ -152,7 +152,10 @@ class MoEProbe:
         ax.legend()
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.show()
+        
+        # Log plot with wandb
+        if wandb_run is not None:
+            wandb_run.log({"Load Balance Plot": fig})
 
 # MoE monitoring probe specialized for Qwen MoE models
 class MoEProbeQwen(MoEProbe):

@@ -54,10 +54,6 @@ class GatingFuncTopK(AuxLossMixin, nn.Module):
         
         outputs = self.fc(x) # [batch, seq_len, n_experts]
         
-        # As a test, try assigning all inputs to one expert.
-        #outputs = torch.zeros_like(outputs)
-        #outputs[:, :, 0] = 1.0
-        
         # Save routing weights, topk for monitoring purposes
         self.routing_weights = torch.softmax(outputs, dim=-1) # [batch, seq_len, n_experts]
         self.topk_vals, self.topk_indices = torch.topk(self.routing_weights, self.k, dim=-1) # [batch, seq_len, k] (both)
