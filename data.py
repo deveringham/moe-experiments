@@ -17,7 +17,7 @@ from torch.nn.utils.rnn import pad_sequence
 from config import *
 
 # Context Size used for sliding window sampling
-SAMPLING_CONTEXT_SIZE = 4
+SAMPLING_CONTEXT_SIZE = 10
 
 # Special token definitions
 PAD_TOK = "<|PAD|>" # Padding token
@@ -140,11 +140,13 @@ class TextDataset(Dataset):
         
         # Use a sliding window over the input text to generate samples from
         # sequences of length context_length
+        # Data is sequences beginning with SOS, ex. [SOS, t0, t1] (for context_size 3)
+        # Labels are these sequences shifted by 1, ex. [t0, t1, t2]
         for i in range(0, len(input_tokens) - context_size, stride):
-            value = input_tokens[i:i+context_size]
+            value = input_tokens[i:i+context_size-1]
             self.values.append(torch.tensor([self.sos_idx] + value))
-            label = input_tokens[i+1:i+context_size+1]
-            self.labels.append(torch.tensor(label + [self.eos_idx]))
+            label = input_tokens[i:i+context_size]
+            self.labels.append(torch.tensor(label))
         
     def __len__(self):
         return len(self.values)
@@ -193,7 +195,7 @@ def get_dataloader_reverse(n_samples, batch_size):
     return dataloader
 
 # Function to generate text using trained transformer model
-def generate_text_transformer(model, tokenizer, start_context="", max_length=4, context_size=4):
+def generate_text_transformer(model, tokenizer, start_context="", max_length=4):
     
     model.eval()
     vocab = tokenizer.get_vocab()
@@ -225,7 +227,7 @@ def generate_text_transformer(model, tokenizer, start_context="", max_length=4, 
     return output_text
 
 # Function to generate text using trained decoder-only model
-def generate_text_decoderonly(model, tokenizer, start_context="", max_length=4, context_size=4):
+def generate_text_decoderonly(model, tokenizer, start_context="", max_length=4):
     
     model.eval()
     vocab = tokenizer.get_vocab()
@@ -235,20 +237,32 @@ def generate_text_decoderonly(model, tokenizer, start_context="", max_length=4, 
     indices = tokenizer.encode(start_context)
     start_context_len = len(indices)
     indices = [sos_idx] + indices # add SOS token
-    indices = torch.tensor(indices).unsqueeze(0) # [1, seq_len]
+    indices = torch.tensor(indices).unsqueeze(0) # [1, start_len+1]
     x = indices
     
     generated_tokens = []
     
     for step in range(1, max_length):
         
-        logits = model(x)
+        print(f"input: {tokenizer.decode(x.squeeze(0).tolist())}")
+        
+        logits = model(x) # [batch_size, seq_len, vocab_size]
+        
+        # Try looking at top 10 most likely tokens
+        topk_vals, topk_tokens = torch.topk(logits, 5, dim=-1)
+        
+        print(f"most likely tokens: {tokenizer.decode(topk_tokens.squeeze(0)[-1, :].tolist())}")
+        
         #all_preds = torch.argmax(logits, dim=-1)
         predicted_idx = torch.argmax(logits[:, -1, :], dim=-1).item()
-        print(tokenizer.decode([predicted_idx]))
+        print(f"output token: {tokenizer.decode([predicted_idx])}")
         generated_tokens.append(predicted_idx)
+        
         if predicted_idx == eos_idx:
             break
+        
+        # Append generated token to input
+        x = torch.cat((x, torch.tensor([[predicted_idx]]).type_as(x)), dim=1)
     
     output_text = tokenizer.decode(generated_tokens)
     return output_text

@@ -350,8 +350,7 @@ def run_experiment_train_basic_decoderonly_text(enable_wandb=False):
         model=model,
         tokenizer=tokenizer,
         start_context=start_context,
-        max_length=10, 
-        context_size=4
+        max_length=10
     )
 
     print("Output:", output_text)
