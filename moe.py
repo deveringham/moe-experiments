@@ -9,7 +9,7 @@
 # Dependencies
 import torch
 import torch.nn as nn
-from basic_transformer import *
+from basic_models import *
 
 # Helper class for collecting and accessing auxilliary loss calculations
 class AuxLossMixin:
@@ -205,22 +205,33 @@ class EncoderMoE(nn.Module):
 # Decoder layer composed of experts
 class DecoderLayerMoE(nn.Module):
     
-    def __init__(self, embedding_dim=256, expert_dim=2048, n_experts=64, dropout=0.1, n_heads=4):
+    def __init__(self, embedding_dim=256, expert_dim=2048, n_experts=64, dropout=0.1, n_heads=4,
+                using_encoder=True):
         """
         embedding_dim: Dimensionality of embeddings.
         droupout: Dropout probability.
         n_heads: The number of attention heads to split the input into.
+        using_encoder: If true, includes cross-attention.
         """
         
         super(DecoderLayerMoE, self).__init__()
+        
+        # Set whether we are using an encoder or not
+        # If not, cross attention (and memory) are disabled
+        # Set to false for decoder-only architectures
+        self.using_encoder = using_encoder
         
         # The first Multi-Head Attention has a mask to avoid looking at the future
         self.self_attention = MultiHeadAttention(embedding_dim=embedding_dim, n_heads=n_heads)
         self.norm1 = nn.LayerNorm(embedding_dim)
         
         # The second Multi-Head Attention will take inputs from the encoder as key/value inputs
-        self.cross_attention = MultiHeadAttention(embedding_dim=embedding_dim, n_heads=n_heads)
-        self.norm2 = nn.LayerNorm(embedding_dim)
+        if self.using_encoder:
+            self.cross_attention = MultiHeadAttention(embedding_dim=embedding_dim, n_heads=n_heads)
+            self.norm2 = nn.LayerNorm(embedding_dim)
+        else:
+            self.cross_attention = None
+            self.norm2 = None
         
         self.ff = ExpertLayer(input_dim=embedding_dim, gating_dim=embedding_dim,
                               expert_dim=expert_dim, n_experts=n_experts,
@@ -229,15 +240,16 @@ class DecoderLayerMoE(nn.Module):
         #self.dropout = nn.Dropout(dropout)
         
         
-    def forward(self, tgt, memory, tgt_mask=None, tgt_padding_mask=None, memory_padding_mask=None):
+    def forward(self, tgt, memory=None, tgt_mask=None, tgt_padding_mask=None, memory_padding_mask=None):
         
         masked_att_output = self.self_attention(
             q=tgt, k=tgt, v=tgt, attention_mask=tgt_mask, key_padding_mask=tgt_padding_mask)
-        x1 = tgt + self.norm1(masked_att_output)
+        x = tgt + self.norm1(masked_att_output)
         
-        cross_att_output = self.cross_attention(
-            q=x1, k=memory, v=memory, attention_mask=None, key_padding_mask=memory_padding_mask)
-        x2 = x1 + self.norm2(cross_att_output)
+        if self.using_encoder:
+            cross_att_output = self.cross_attention(
+                q=x, k=memory, v=memory, attention_mask=None, key_padding_mask=memory_padding_mask)
+            x = x + self.norm2(cross_att_output)
         
         
         # For MHA we need an additive mask (i.e. 0s and -infs)
@@ -248,20 +260,22 @@ class DecoderLayerMoE(nn.Module):
         else:
             mult_mask = None
         
-        ff_output = self.ff(x2, mask=mult_mask)
-        output = x2 + self.norm3(ff_output)
+        ff_output = self.ff(x, mask=mult_mask)
+        output = x + self.norm3(ff_output)
         return output
 
 # Decoder composed of expert layers
 class DecoderMoE(nn.Module):
     
-    def __init__(self, vocab_size, embedding_dim=256, expert_dim=2048, n_experts=64, dropout=0.1, n_decoder_layers=4, n_heads=4):
+    def __init__(self, vocab_size, embedding_dim=256, expert_dim=2048, n_experts=64, dropout=0.1, n_decoder_layers=4, n_heads=4,
+                using_encoder=True):
         """
         vocab_size: Size of dictionary of embeddings.
         embedding_dim: Dimensionality of embeddings.
         droupout: Dropout probability.
         n_decoder_layers: Number of decoder layers.
         n_heads: The number of attention heads to split the input into.
+        using_encoder: If true, decoder layers include cross-attention.
         """
         
         super(DecoderMoE, self).__init__()
@@ -271,21 +285,21 @@ class DecoderMoE(nn.Module):
         self.positional_encoding = PositionalEncoding(
             embedding_dim=embedding_dim, dropout=dropout)
         self.decoder_layers = nn.ModuleList([
-            DecoderLayerMoE(embedding_dim, expert_dim, n_experts, dropout, n_heads) for _ in range(n_decoder_layers)])
+            DecoderLayerMoE(embedding_dim, expert_dim, n_experts, dropout, n_heads, using_encoder=using_encoder) for _ in range(n_decoder_layers)])
         
         
-    def forward(self, tgt, memory, tgt_mask=None, tgt_padding_mask=None, memory_padding_mask=None):
+    def forward(self, tgt, memory=None, tgt_mask=None, tgt_padding_mask=None, memory_padding_mask=None):
         
         x = self.embedding(tgt)
         x = self.positional_encoding(x)
 
         for layer in self.decoder_layers:
-            x = layer(x, memory, tgt_mask=tgt_mask, tgt_padding_mask=tgt_padding_mask, 
+            x = layer(x, memory=memory, tgt_mask=tgt_mask, tgt_padding_mask=tgt_padding_mask, 
                 memory_padding_mask=memory_padding_mask)
         return x
 
 # Basic transformer model modified to include expert layers in both encoder and decoder
-class TransformerMoE(nn.Module):
+class TransformerLM_MoE(nn.Module):
     
     def __init__(self, **kwargs):
         """
@@ -375,5 +389,77 @@ class TransformerMoE(nn.Module):
         # Decoder output shape [batch, tgt_seq_len, embedding_dim]
         decoder_output = self.decode(tgt=y, memory=encoder_output, 
             memory_padding_mask=encoder_mask)
+        
+        return decoder_output
+
+# Decoder-only model modified with MoE layers in decoder
+class DecoderOnlyLM_MoE(nn.Module):
+
+    def __init__(self, **kwargs):
+        """
+        vocab_size: Number of distinct tokens in vocabulary for this task.
+        embedding_dim: Dimensionality of embeddings.
+        droupout: Dropout probability.
+        n_decoder_layers: Number of decoder layers.
+        n_heads: The number of attention heads to split the input into.
+        """
+
+        super(TransformerLM, self).__init__()
+
+        self.vocab_size = kwargs.get('vocab_size')
+        self.embedding_dim = kwargs.get('embedding_dim')
+        self.ff_dim = kwargs.get('ff_dim')
+        self.dropout = kwargs.get('dropout')
+        self.n_decoder_layers = kwargs.get('n_decoder_layers')
+        self.n_heads = kwargs.get('n_heads')
+        self.batch_size = kwargs.get('batch_size')
+        self.pad_idx = kwargs.get('pad_idx', PAD_IDX)
+
+        #self.decoder = Decoder(
+        #    self.vocab_size, self.embedding_dim, self.ff_dim, self.dropout, self.n_decoder_layers, self.n_heads,
+        #    using_encoder=False)
+        self.decoder = DecoderMoE(
+            self.vocab_size, self.embedding_dim, self.expert_dim, self.n_experts,
+            self.dropout, self.n_decoder_layers, self.n_heads,
+            using_encoder=False)
+        
+        self.fc = nn.Linear(self.embedding_dim, self.vocab_size) # output linear layer i.e. LM head
+
+    @staticmethod
+    def generate_square_subsequent_mask(size: int):
+        """
+        Generate a triangular [size, size] mask. From PyTorch docs.
+        """
+
+        mask = (1 - torch.triu(torch.ones(size, size), diagonal=1)).bool()
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+    
+    def decode(self, tgt, memory_padding_mask=None):
+        """
+        x: tensor of shape [batch, src_seq_len, embedding_dim]
+        memory_padding_mask: tensor of shape [batch, tgt_seq_len, embedding_dim]
+        """
+        
+        mask = (tgt == self.pad_idx).float()
+        tgt_padding_mask = mask.masked_fill(mask == 1, float('-inf'))
+
+        decoder_output = self.decoder(tgt=tgt, memory=None, 
+            tgt_mask=self.generate_square_subsequent_mask(tgt.size(1)), 
+            tgt_padding_mask=tgt_padding_mask, 
+            memory_padding_mask=memory_padding_mask
+        )
+        output = self.fc(decoder_output)  # [batch_size, seq_length, vocab_size]
+        return output
+
+    def forward(self, x):
+        """
+        x: tensor of shape [batch, seq_len, embedding_dim]
+        """
+        
+        # Decoder output shape [batch, seq_len, vocab_size]
+        decoder_output = self.decode(tgt=x,
+            memory_padding_mask=None
+        )
         
         return decoder_output

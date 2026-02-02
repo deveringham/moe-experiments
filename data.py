@@ -21,7 +21,7 @@ SAMPLING_CONTEXT_SIZE = 4
 
 # Special token definitions
 PAD_TOK = "<|PAD|>" # Padding token
-PAD_IDX = 0 
+PAD_IDX = 0
 SOS_TOK = "<|SOS|>" # Start of sequence token
 SOS_IDX = 1
 EOS_TOK = "<|EOS|>" # End of sequence token
@@ -142,9 +142,9 @@ class TextDataset(Dataset):
         # sequences of length context_length
         for i in range(0, len(input_tokens) - context_size, stride):
             value = input_tokens[i:i+context_size]
-            self.values.append(torch.tensor(self.append_sos_and_eos(value)))
+            self.values.append(torch.tensor([self.sos_idx] + value))
             label = input_tokens[i+1:i+context_size+1]
-            self.labels.append(torch.tensor(self.append_sos_and_eos(label)))
+            self.labels.append(torch.tensor(label + [self.eos_idx]))
         
     def __len__(self):
         return len(self.values)
@@ -152,8 +152,6 @@ class TextDataset(Dataset):
     def __getitem__(self, idx):
         return self.values[idx], self.labels[idx]
 
-    def append_sos_and_eos(self, indices):
-        return [self.sos_idx] + indices + [self.eos_idx]
         
 class ReverseDataset(Dataset):
     
@@ -195,7 +193,7 @@ def get_dataloader_reverse(n_samples, batch_size):
     return dataloader
 
 # Function to generate text using trained transformer model
-def generate_text(model, tokenizer, start_context="", max_length=4, context_size=4):
+def generate_text_transformer(model, tokenizer, start_context="", max_length=4, context_size=4):
     
     model.eval()
     vocab = tokenizer.get_vocab()
@@ -217,9 +215,39 @@ def generate_text(model, tokenizer, start_context="", max_length=4, context_size
         
         logits = model.decode(tgt=y, memory=encoder_output, memory_padding_mask=encoder_padding_mask)
         predicted_idx = torch.argmax(logits[:, -1, :], dim=-1).item()
+        print(tokenizer.decode([predicted_idx]))
         generated_tokens.append(predicted_idx)
         y = torch.cat([y, torch.tensor([[predicted_idx]]).type_as(y)], dim=1)
-        if predicted_idx is eos_idx:
+        if predicted_idx == eos_idx:
+            break
+    
+    output_text = tokenizer.decode(generated_tokens)
+    return output_text
+
+# Function to generate text using trained decoder-only model
+def generate_text_decoderonly(model, tokenizer, start_context="", max_length=4, context_size=4):
+    
+    model.eval()
+    vocab = tokenizer.get_vocab()
+    sos_idx = vocab[SOS_TOK]
+    eos_idx = vocab[EOS_TOK]
+    
+    indices = tokenizer.encode(start_context)
+    start_context_len = len(indices)
+    indices = [sos_idx] + indices # add SOS token
+    indices = torch.tensor(indices).unsqueeze(0) # [1, seq_len]
+    x = indices
+    
+    generated_tokens = []
+    
+    for step in range(1, max_length):
+        
+        logits = model(x)
+        #all_preds = torch.argmax(logits, dim=-1)
+        predicted_idx = torch.argmax(logits[:, -1, :], dim=-1).item()
+        print(tokenizer.decode([predicted_idx]))
+        generated_tokens.append(predicted_idx)
+        if predicted_idx == eos_idx:
             break
     
     output_text = tokenizer.decode(generated_tokens)

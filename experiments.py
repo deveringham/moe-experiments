@@ -3,7 +3,7 @@
 #
 # Routines for MoE experiments.
 # Dylan Everingham
-# 22.01.2026
+# 02.02.2026
 ###
 
 import torch
@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import wandb
 from config import *
-from basic_transformer import *
+from basic_models import *
 from moe import *
 from data import *
 from utils import *
@@ -22,11 +22,11 @@ from monitoring import *
 
 ################################################################################
 
-def run_experiment_train_basic(enable_wandb=False):
+def run_experiment_train_basic_transformer_stringreverse(enable_wandb=False):
     
     # Configure Weights and Biases
     timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
-    wandb_id = f"NativeTransformer-{timestamp}"
+    wandb_id = f"NativeTransformerLM-{timestamp}"
     if enable_wandb:
         wandb_run = wandb.init(
             entity="dceveringham-technical-university-of-berlin",
@@ -52,7 +52,7 @@ def run_experiment_train_basic(enable_wandb=False):
                 "n_samples_train": n_samples_train,
                 "n_samples_test": n_samples_test,
                 "auxiliary_losses": auxiliary_losses,
-                "architecture": "Native Transformer",
+                "architecture": "Native Transformer LM",
                 "dataset": "StringReverse",
             },
         )
@@ -69,7 +69,7 @@ def run_experiment_train_basic(enable_wandb=False):
         'n_decoder_layers': n_decoder_layers,
         'n_heads': n_heads
     }
-    model = Transformer(**args)
+    model = TransformerLM(**args)
     
     # Count parameters in model
     print(f"Total Trainable Params: {count_params(model)}")
@@ -97,7 +97,7 @@ def run_experiment_train_basic(enable_wandb=False):
         start_time = time.time()
         
         # Train
-        train_loss, train_acc, train_hist = train(model, optimizer, dataloader_train, loss_fn, epoch)
+        train_loss, train_acc, train_hist = train_transformer(model, optimizer, dataloader_train, loss_fn, epoch)
         
         # Stop timing
         end_time = time.time()
@@ -153,7 +153,7 @@ def run_experiment_train_basic(enable_wandb=False):
 
 ################################################################################
 
-def run_experiment_train_basic_text(enable_wandb=False):
+def run_experiment_train_basic_transformer_text(enable_wandb=False):
     
     # Get datasets
     with open("the-verdict.txt", "r", encoding="utf-8") as f:
@@ -163,7 +163,7 @@ def run_experiment_train_basic_text(enable_wandb=False):
     
     # Configure Weights and Biases
     timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
-    wandb_id = f"NativeTransformer-{timestamp}"
+    wandb_id = f"NativeTransformerLM-{timestamp}"
     if enable_wandb:
         wandb_run = wandb.init(
             entity="dceveringham-technical-university-of-berlin",
@@ -189,7 +189,7 @@ def run_experiment_train_basic_text(enable_wandb=False):
                 "n_samples_train": n_samples_train,
                 "n_samples_test": n_samples_test,
                 "auxiliary_losses": auxiliary_losses,
-                "architecture": "Native Transformer",
+                "architecture": "Native Transformer LM",
                 "dataset": "TheVerdict",
                 "vocab_size": vocab_size,
             },
@@ -205,9 +205,10 @@ def run_experiment_train_basic_text(enable_wandb=False):
         'dropout': dropout,
         'n_encoder_layers': n_encoder_layers,
         'n_decoder_layers': n_decoder_layers,
-        'n_heads': n_heads
+        'n_heads': n_heads,
+        'pad_idx': vocab[PAD_TOK],
     }
-    model = Transformer(**args)
+    model = TransformerLM(**args)
     
     # Count parameters in model
     print(f"Total Trainable Params: {count_params(model)}")
@@ -231,7 +232,7 @@ def run_experiment_train_basic_text(enable_wandb=False):
         start_time = time.time()
         
         # Train
-        train_loss, train_acc, train_hist = train(model, optimizer, dataloader_train, loss_fn, epoch)
+        train_loss, train_acc, train_hist = train_transformer(model, optimizer, dataloader_train, loss_fn, epoch)
         
         # Stop timing
         end_time = time.time()
@@ -287,7 +288,153 @@ def run_experiment_train_basic_text(enable_wandb=False):
 
 ################################################################################
 
-def run_experiment_train_moe(enable_wandb=False):
+def run_experiment_train_basic_decoderonly_text(enable_wandb=False):
+    
+    # Get datasets
+    with open("the-verdict.txt", "r", encoding="utf-8") as f:
+        text = f.read()
+    dataloader_train, tokenizer, vocab = get_dataloader_text(text, batch_size=batch_size)
+    vocab_size = len(vocab)
+    
+    # Configure Weights and Biases
+    timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    wandb_id = f"NativeDecoderOnlyLM-{timestamp}"
+    if enable_wandb:
+        wandb_run = wandb.init(
+            entity="dceveringham-technical-university-of-berlin",
+            project="moe-experiments",
+            id=wandb_id,
+
+            # Track hyperparameters and run metadata
+            config = {
+
+                # Hyperparameters
+                "batch_size": batch_size,
+                "learning_rate": learning_rate,
+                "embedding_dim": embedding_dim,
+                "n_heads": n_heads,
+                "n_encoder_layers": n_encoder_layers,
+                "n_decoder_layers": n_decoder_layers,
+                "dropout": dropout,
+                "n_epoch": n_epochs,
+                "n_experts": n_experts,
+                "ff_dim": ff_dim, 
+                "expert_dim": expert_dim,
+                "n_samples_val": n_samples_val,
+                "n_samples_train": n_samples_train,
+                "n_samples_test": n_samples_test,
+                "auxiliary_losses": auxiliary_losses,
+                "architecture": "Native Decoder-Only LM",
+                "dataset": "TheVerdict",
+                "vocab_size": vocab_size,
+            },
+        )
+    else:
+        wandb_run = None
+    
+    # Select model architecture
+    args = {
+        'vocab_size': vocab_size,
+        'embedding_dim': embedding_dim,
+        'ff_dim': ff_dim,
+        'dropout': dropout,
+        'n_decoder_layers': n_decoder_layers,
+        'n_heads': n_heads,
+        'pad_idx': vocab[PAD_TOK],
+    }
+    model = DecoderOnlyLM(**args)
+    
+    # Generate some text before training
+    start_context = "It had always been"
+    output_text = generate_text_decoderonly(
+        model=model,
+        tokenizer=tokenizer,
+        start_context=start_context,
+        max_length=10, 
+        context_size=4
+    )
+
+    print("Output:", output_text)
+    
+    # Count parameters in model
+    print(f"Total Trainable Params: {count_params(model)}")
+    
+    # Initialize model parameters
+    for p in model.parameters():
+        if p.dim() > 1:
+            nn.init.xavier_uniform_(p)
+    
+    # Define loss function
+    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=PAD_IDX)
+    
+    # Instantiate optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.98), eps=1e-9)
+    
+    # Training loop
+    history = {}
+    for epoch in range(1, n_epochs+1):
+        
+        # Time each epoch
+        start_time = time.time()
+        
+        # Train
+        train_loss, train_acc, train_hist = train_decoderonly(model, optimizer, dataloader_train, loss_fn, epoch)
+        
+        # Stop timing
+        end_time = time.time()
+        
+        # Combine results history from multiple epochs
+        for key, value in train_hist.items():
+            if key in history:
+                history[key] += value
+            else:
+                history[key] = value
+        
+        # Evaluate
+        #eval_loss, eval_acc, eval_hist = evaluate(model, dataloader_val, loss_fn)
+        
+        # Log metrics to wandb
+        if enable_wandb:
+            wandb_metrics = {
+                "train_acc": train_acc,
+                "train_loss": train_loss,
+                #"eval_acc": eval_acc,
+                #"eval_loss": eval_loss,
+            }
+            wandb_run.log(wandb_metrics)
+        
+        print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Train acc: {train_acc:.3f} Epoch time = {(end_time - start_time):.3f}s"))
+    
+    # Plot normalized loss and accuracy
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    loss_total = history['loss_total'] / np.max(history['loss_total'])
+    ax.plot(loss_total, alpha=0.7, label='Training Loss (Total)')
+    
+    acc = history['accuracy']
+    ax.plot(acc, alpha=0.7, label='Training Accuracy')
+    
+    ax.set_title("Normalized Loss Metrics")
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Normalized Metric")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if enable_wandb:
+        # Log load balance plot
+        wandb_run.log({"Loss and Accuracy Plot": fig})
+        
+        # Finish the wandb run and upload any remaining data
+        wandb_run.finish()
+        
+    # Show plot
+    plt.show()
+    
+    return model, tokenizer, args, history
+
+################################################################################
+
+def run_experiment_train_moe_transformer_stringreverse(enable_wandb=False):
     
     # Configure Weights and Biases
     if enable_wandb:
@@ -368,7 +515,7 @@ def run_experiment_train_moe(enable_wandb=False):
         start_time = time.time()
         
         # Train
-        train_loss, train_acc, train_hist = train(model, optimizer, dataloader_train, loss_fn, epoch)
+        train_loss, train_acc, train_hist = train_transformer(model, optimizer, dataloader_train, loss_fn, epoch)
         
         # Stop timing
         end_time = time.time()
@@ -381,7 +528,7 @@ def run_experiment_train_moe(enable_wandb=False):
                 history[key] = value
         
         # Evaluate
-        eval_loss, eval_acc, eval_hist = evaluate(model, dataloader_val, loss_fn)
+        eval_loss, eval_acc, eval_hist = evaluate_transformer(model, dataloader_val, loss_fn)
         
         # Log metrics to wandb
         if enable_wandb:
@@ -464,7 +611,7 @@ def run_experiment_inference_moe_probe(model):
     
 ################################################################################
 
-def train(model, optimizer, loader, loss_fn, epoch):
+def train_transformer(model, optimizer, loader, loss_fn, epoch):
     
     # Put model in training mode
     model.train()
@@ -486,10 +633,14 @@ def train(model, optimizer, loader, loss_fn, epoch):
         for x, y in tepoch: # x: [batch, src_seq_len], y: [batch, tgt_seq_len]
             tepoch.set_description(f"Epoch {epoch}")
             
+            #print(f"x: {x.size()}")
+            #print(f"y: {y.size()}")
+            
             optimizer.zero_grad()
             
             # Evaluate model and calculate loss
             logits = model(x, y[:, :-1])
+            #print(f"logits: {logits.size()}")
             loss_base = loss_fn(logits.contiguous().view(-1, model.vocab_size), y[:, 1:].contiguous().view(-1))
             
             # Get any auxiliary losses
@@ -523,7 +674,71 @@ def train(model, optimizer, loader, loss_fn, epoch):
     
     return losses / len(list(loader)), acc / len(list(loader)), history
 
-def evaluate(model, loader, loss_fn):
+
+def train_decoderonly(model, optimizer, loader, loss_fn, epoch):
+    
+    # Put model in training mode
+    model.train()
+    
+    # We accumulate loss and accuracy values here and divide by sample number
+    # before returning
+    losses = 0
+    acc = 0
+    
+    # Dictionary to hold traces of values we care about
+    history = {
+        "loss_total": [],
+        "loss_base": [],
+        "loss_aux": [],
+        "accuracy": []
+    }
+
+    with tqdm(loader, position=0, leave=True) as tepoch:
+        for x, y in tepoch: # x: [batch, src_seq_len], y: [batch, tgt_seq_len]
+            tepoch.set_description(f"Epoch {epoch}")
+            
+            optimizer.zero_grad()
+            
+            #print(f"x: {x.size()}")
+            #print(f"y: {y.size()}")
+            
+            # Evaluate model and calculate loss
+            logits = model(x)
+            #print(f"logits: {logits.size()}")
+            loss_base = loss_fn(logits.contiguous().view(-1, model.vocab_size), y.contiguous().view(-1))
+            
+            # Get any auxiliary losses
+            loss_aux = 0
+            for name, weight in auxiliary_losses.items():
+                loss_aux += collect_aux_loss(model, name) * weight
+            # Combine loss terms
+            loss = loss_base + loss_aux
+            loss.backward()
+            optimizer.step()
+            losses += loss.item()
+            
+            # Calculate accuracy
+            preds = logits.argmax(dim=-1)
+            masked_pred = preds * (y!=PAD_IDX)
+            accuracy = (masked_pred == y).float().mean()
+            acc += accuracy.item()
+            
+            # Capture results
+            history["loss_total"].append(loss.item())
+            history["loss_base"].append(loss_base.item())
+            history["loss_aux"].append(loss_aux.item())
+            history["accuracy"].append(accuracy.item())
+            for name, _ in auxiliary_losses.items():
+                if name in history:
+                    history[name].append(collect_aux_loss(model, name))
+                else:
+                    history[name] = [collect_aux_loss]
+            
+            tepoch.set_postfix(loss=loss.item(), accuracy=100. * accuracy.item())
+    
+    return losses / len(list(loader)), acc / len(list(loader)), history
+
+def evaluate_transformer(model, loader, loss_fn):
     
     # Put model in evaluation mode
     model.eval()
