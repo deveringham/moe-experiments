@@ -311,7 +311,7 @@ class TransformerLM_MoE(nn.Module):
         n_heads: The number of attention heads to split the input into.
         """
         
-        super(TransformerMoE, self).__init__()
+        super(TransformerLM_MoE, self).__init__()
         
         self.vocab_size = kwargs.get('vocab_size')
         self.embedding_dim = kwargs.get('embedding_dim')
@@ -322,7 +322,7 @@ class TransformerLM_MoE(nn.Module):
         self.n_decoder_layers = kwargs.get('n_decoder_layers')
         self.n_heads = kwargs.get('n_heads')
         self.batch_size = kwargs.get('batch_size')
-        self.PAD_IDX = kwargs.get('pad_idx', 0)
+        self.pad_idx = kwargs.get('pad_idx')
         
         #self.encoder = Encoder(
         #    self.vocab_size, self.embedding_dim, self.n_experts*self.expert_dim, self.dropout, self.n_encoder_layers, self.n_heads)
@@ -353,7 +353,7 @@ class TransformerLM_MoE(nn.Module):
         x: tensor of shape [batch, src_seq_len, embedding_dim]
         """
 
-        mask = (x == self.PAD_IDX).float()
+        mask = (x == self.pad_idx).float()
         encoder_mask = mask.masked_fill(mask == 1, float('-inf'))
         
         encoder_output = self.encoder(x, src_padding_mask=encoder_mask)
@@ -366,7 +366,7 @@ class TransformerLM_MoE(nn.Module):
         memory_mask: tensor of shape [batch, tgt_seq_len, embedding_dim]
         """
         
-        mask = (tgt == self.PAD_IDX).float()
+        mask = (tgt == self.pad_idx).float()
         tgt_padding_mask = mask.masked_fill(mask == 1, float('-inf'))
 
         decoder_output = self.decoder(tgt=tgt, memory=memory, 
@@ -404,16 +404,17 @@ class DecoderOnlyLM_MoE(nn.Module):
         n_heads: The number of attention heads to split the input into.
         """
 
-        super(TransformerLM, self).__init__()
+        super(DecoderOnlyLM_MoE, self).__init__()
 
         self.vocab_size = kwargs.get('vocab_size')
         self.embedding_dim = kwargs.get('embedding_dim')
-        self.ff_dim = kwargs.get('ff_dim')
+        self.expert_dim = kwargs.get('expert_dim')
+        self.n_experts = kwargs.get('n_experts')
         self.dropout = kwargs.get('dropout')
         self.n_decoder_layers = kwargs.get('n_decoder_layers')
         self.n_heads = kwargs.get('n_heads')
         self.batch_size = kwargs.get('batch_size')
-        self.pad_idx = kwargs.get('pad_idx', PAD_IDX)
+        self.pad_idx = kwargs.get('pad_idx')
 
         #self.decoder = Decoder(
         #    self.vocab_size, self.embedding_dim, self.ff_dim, self.dropout, self.n_decoder_layers, self.n_heads,
@@ -463,3 +464,10 @@ class DecoderOnlyLM_MoE(nn.Module):
         )
         
         return decoder_output
+
+# Supported model specifications
+supported_model_types = (
+    TransformerLM, TransformerLM_MoE, DecoderOnlyLM, DecoderOnlyLM_MoE )
+supported_moe_models = ( TransformerLM_MoE, DecoderOnlyLM_MoE )
+supported_transformer_models = ( TransformerLM, TransformerLM_MoE )
+supported_decoderonly_models = ( DecoderOnlyLM, DecoderOnlyLM_MoE )

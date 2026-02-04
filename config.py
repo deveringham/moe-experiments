@@ -3,7 +3,7 @@
 #
 # Hyperparameters for MoE experiment runs.
 # Dylan Everingham
-# 09.12.2025
+# 02.02.2026
 ###
 
 import torch
@@ -16,17 +16,20 @@ n_heads = 4 # Number of attention heads
 n_encoder_layers = 1 # Number of transformer encoder layers
 n_decoder_layers = 1 # Number of transformer decoder layers
 dropout = 0.1
-n_epochs = 10
+n_epochs = 4
 n_experts = 64
 ff_dim = 2048 # Hidden dimension of FFNs in basic Transformer
 expert_dim = ff_dim//n_experts # Hidden dimension of expert FFNs
-n_samples_val = 1000
-n_samples_train = n_samples_val*5
-n_samples_test = n_samples_val
+
+n_samples_train = 10000 # Sample counts used for string reverse dataset
+n_samples_val = 100
+n_samples_test = 10
+
+sampling_context_size = 32 # Context Size used for sliding window sampling
 
 # Dictionary containing names and weights of auxiliary loss terms
-auxiliary_losses = {
-    "loss_load_balancing": 0.2,
+auxiliary_losses= {
+    "loss_load_balancing": 0.0,
     "loss_z": 0.0
 }
 

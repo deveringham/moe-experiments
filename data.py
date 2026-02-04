@@ -3,7 +3,7 @@
 #
 # Data loading and tokenizing routines for MoE experiments.
 # Dylan Everingham
-# 26.01.2026
+# 02.02.2026
 ###
 
 # Dependencies
@@ -16,10 +16,9 @@ from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from config import *
 
-# Context Size used for sliding window sampling
-SAMPLING_CONTEXT_SIZE = 10
-
 # Special token definitions
+# The default indices provided here are used only in the string reverse dataset;
+# for text datasets instead these special tokens are appended to the end of the vocabulary
 PAD_TOK = "<|PAD|>" # Padding token
 PAD_IDX = 0
 SOS_TOK = "<|SOS|>" # Start of sequence token
@@ -31,7 +30,7 @@ UNK_IDX = 3
 
 # Dictionary of special tokens with name and index
 special_tokens = {
-    PAD_TOK: PAD_IDX, # Pading
+    PAD_TOK: PAD_IDX, # Padding
     SOS_TOK: SOS_IDX, # Start of sequence
     EOS_TOK: EOS_IDX, # End of sequence
     UNK_TOK: UNK_IDX, # Unknown
@@ -82,8 +81,10 @@ def get_vocab_from_text(text, add_special_tokens=True):
     
     vocab = {token:idx for idx,token in enumerate(vocab)} # Convert to dict
     return vocab
-    
-class Tokenizer:
+
+# Class definitions
+
+class TextTokenizer:
     
     def __init__(self, vocab):
         """
@@ -92,6 +93,10 @@ class Tokenizer:
         
         self.str_to_int = vocab
         self.int_to_str = {i:s for s,i in vocab.items()}
+        self.sos_idx = self.vocab[SOS_TOK]
+        self.eos_idx = self.vocab[EOS_TOK]
+        self.pad_idx = self.vocab[PAD_TOK]
+        self.unk_idx = self.vocab[UNK_TOK]
     
     
     def encode(self, text):
@@ -119,9 +124,10 @@ class Tokenizer:
     def get_vocab(self):
         return self.str_to_int
 
+
 class TextDataset(Dataset):
     
-    def __init__(self, text, tokenizer, stride=1, context_size=SAMPLING_CONTEXT_SIZE):
+    def __init__(self, text, tokenizer, stride=1, context_size=sampling_context_size):
         """
         text: input text from which to generate vocabulary and samples
         context_size: size of sliding window for sampling
@@ -130,10 +136,10 @@ class TextDataset(Dataset):
         super(TextDataset, self).__init__()
         self.tokenizer = tokenizer
         self.vocab = self.tokenizer.get_vocab()
-        self.sos_idx = self.vocab[SOS_TOK]
-        self.eos_idx = self.vocab[EOS_TOK]
-        self.pad_idx = self.vocab[PAD_TOK]
-        self.unk_idx = self.vocab[UNK_TOK]
+        self.sos_idx = self.tokenizer.sos_idx
+        self.eos_idx = self.tokenizer.eos_idx
+        self.pad_idx = self.tokenizer.pad_idx
+        self.unk_idx = self.tokenizer.unk_idx
         self.values = []
         self.labels = []
         input_tokens = self.tokenizer.encode(text)
@@ -154,18 +160,54 @@ class TextDataset(Dataset):
     def __getitem__(self, idx):
         return self.values[idx], self.labels[idx]
 
+    
+class StringReverseTokenizer:
+    
+    def __init__(self):
         
-class ReverseDataset(Dataset):
+        vocab_size = 128
+        num_special_tokens = len(special_tokens)
+        self.char_to_int = {chr(i+94-num_special_tokens):i for i in range(vocab_size)}
+        self.int_to_char = {i:c for c,i in self.char_to_int.items()}
+        self.sos_idx = SOS_IDX
+        self.eos_idx = EOS_IDX
+        self.pad_idx = PAD_IDX
+        self.unk_idx = UNK_IDX
+    
+    def encode(self, string):
+        """
+        Convert input string to integer tokens
+        string: string input
+        """
+        indices = [self.char_to_int[c] for c in string]
+        return indices
+        
+    def decode(self, indices):
+        """
+        Convert integer tokens to string
+        indices: list of token indices
+        """
+        string = ''.join([self.int_to_char[i] for i in indices])
+        return string
+        
+    def get_vocab(self):
+        return self.char_to_int
+
+
+class StringReverseDataset(Dataset):
     
     def __init__(self, n_samples):
         """
         n_samples: number of samples in the dataset
         """
         
-        super(ReverseDataset, self).__init__()
-        self.pad_idx = PAD_IDX
-        self.sos_idx = SOS_IDX
-        self.eos_idx = EOS_IDX
+        super(StringReverseDataset, self).__init__()
+        self.tokenizer = StringReverseTokenizer()
+        self.vocab = self.tokenizer.get_vocab()
+        self.sos_idx = self.tokenizer.sos_idx
+        self.eos_idx = self.tokenizer.eos_idx
+        self.pad_idx = self.tokenizer.pad_idx
+        self.unk_idx = self.tokenizer.unk_idx
         self.values = [generate_random_string() for _ in range(n_samples)]
         self.labels = [x[::-1] for x in self.values]
 
@@ -173,96 +215,26 @@ class ReverseDataset(Dataset):
         return len(self.values) # Number of samples in the dataset
 
     def __getitem__(self, index):
-        return self.text_transform(self.values[index].rstrip("\n")), \
-            self.text_transform(self.labels[index].rstrip("\n"))
-        
-    def text_transform(self, x):
-        return torch.tensor([self.sos_idx] + [ord(z)-97+3 for z in x] + [self.eos_idx])
+        return self.prepare_sample(self.values[index]), \
+            self.prepare_sample(self.labels[index])
+    
+    # Strips off newline, tokenizes, adds SOS and EOS
+    def prepare_sample(self, x):
+        return torch.tensor([self.sos_idx] + self.tokenizer.encode(x.rstrip("\n")) + [self.eos_idx])
 
 # Functions to fetch DataLoaders
+
 def get_dataloader_text(text, batch_size):
     
     vocab = get_vocab_from_text(text)
-    tokenizer = Tokenizer(vocab)
+    tokenizer = TextTokenizer(vocab)
     d_iter = TextDataset(text, tokenizer)
     dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
     return dataloader, tokenizer, vocab
 
 def get_dataloader_reverse(n_samples, batch_size):
     
-    d_iter = ReverseDataset(n_samples)
+    d_iter = StringReverseDataset(n_samples)
+    tokenizer = StringReverseTokenizer()
     dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
-    return dataloader
-
-# Function to generate text using trained transformer model
-def generate_text_transformer(model, tokenizer, start_context="", max_length=4):
-    
-    model.eval()
-    vocab = tokenizer.get_vocab()
-    sos_idx = vocab[SOS_TOK]
-    eos_idx = vocab[EOS_TOK]
-    
-    indices = tokenizer.encode(start_context)
-    start_context_len = len(indices)
-    indices = [sos_idx] + indices + [eos_idx] # add SOS and EOS tokens
-    indices = torch.tensor(indices).unsqueeze(0) # [1, seq_len]
-    
-    x = indices
-    encoder_output, encoder_padding_mask = model.encode(x) # [1, seq_len, embedding_dim]
-    
-    generated_tokens = []
-    y = torch.tensor([[sos_idx]]).type_as(x) # Start with only [SOS] as the decoder input
-    
-    for step in range(1, max_length):
-        
-        logits = model.decode(tgt=y, memory=encoder_output, memory_padding_mask=encoder_padding_mask)
-        predicted_idx = torch.argmax(logits[:, -1, :], dim=-1).item()
-        print(tokenizer.decode([predicted_idx]))
-        generated_tokens.append(predicted_idx)
-        y = torch.cat([y, torch.tensor([[predicted_idx]]).type_as(y)], dim=1)
-        if predicted_idx == eos_idx:
-            break
-    
-    output_text = tokenizer.decode(generated_tokens)
-    return output_text
-
-# Function to generate text using trained decoder-only model
-def generate_text_decoderonly(model, tokenizer, start_context="", max_length=4):
-    
-    model.eval()
-    vocab = tokenizer.get_vocab()
-    sos_idx = vocab[SOS_TOK]
-    eos_idx = vocab[EOS_TOK]
-    
-    indices = tokenizer.encode(start_context)
-    start_context_len = len(indices)
-    indices = [sos_idx] + indices # add SOS token
-    indices = torch.tensor(indices).unsqueeze(0) # [1, start_len+1]
-    x = indices
-    
-    generated_tokens = []
-    
-    for step in range(1, max_length):
-        
-        print(f"input: {tokenizer.decode(x.squeeze(0).tolist())}")
-        
-        logits = model(x) # [batch_size, seq_len, vocab_size]
-        
-        # Try looking at top 10 most likely tokens
-        topk_vals, topk_tokens = torch.topk(logits, 5, dim=-1)
-        
-        print(f"most likely tokens: {tokenizer.decode(topk_tokens.squeeze(0)[-1, :].tolist())}")
-        
-        #all_preds = torch.argmax(logits, dim=-1)
-        predicted_idx = torch.argmax(logits[:, -1, :], dim=-1).item()
-        print(f"output token: {tokenizer.decode([predicted_idx])}")
-        generated_tokens.append(predicted_idx)
-        
-        if predicted_idx == eos_idx:
-            break
-        
-        # Append generated token to input
-        x = torch.cat((x, torch.tensor([[predicted_idx]]).type_as(x)), dim=1)
-    
-    output_text = tokenizer.decode(generated_tokens)
-    return output_text
+    return dataloader, tokenizer, tokenizer.get_vocab()
