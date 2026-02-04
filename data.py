@@ -38,30 +38,6 @@ special_tokens = {
 
 # Helper functions
 
-def collate_fn(batch):
-    """
-    Pads inputs with PAD_IDX to have batches of equal length
-    batch: list of tuples of (src, tgt), where each is 1D tensor
-    """
-    
-    src_batch, tgt_batch = [], []
-    for src_sample, tgt_sample in batch:
-        src_batch.append(src_sample)
-        tgt_batch.append(tgt_sample)
-
-    src_batch = pad_sequence(src_batch, padding_value=PAD_IDX, batch_first=True)
-    tgt_batch = pad_sequence(tgt_batch, padding_value=PAD_IDX, batch_first=True)
-    return src_batch, tgt_batch
-
-
-def generate_random_string():
-    """ 
-    Random strings for dataset generation
-    """
-    
-    len = np.random.randint(10, 20)
-    return "".join([chr(x) for x in np.random.randint(97, 97+26, len)])
-
 def get_vocab_from_text(text, add_special_tokens=True):
     """
     Extracts vocabulary from input text and adds special tokens (SOS, EOS, PAD, UNK)
@@ -82,6 +58,36 @@ def get_vocab_from_text(text, add_special_tokens=True):
     vocab = {token:idx for idx,token in enumerate(vocab)} # Convert to dict
     return vocab
 
+def get_dataloader_text(text, batch_size):
+    
+    vocab = get_vocab_from_text(text)
+    tokenizer = TextTokenizer(vocab)
+    d_iter = TextDataset(text, tokenizer)
+    dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
+    return dataloader, tokenizer, vocab
+
+def get_dataloader_reverse(n_samples, batch_size):
+    
+    d_iter = StringReverseDataset(n_samples)
+    tokenizer = StringReverseTokenizer()
+    dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
+    return dataloader, tokenizer, tokenizer.get_vocab()
+
+def collate_fn(batch):
+    """
+    Pads inputs with PAD_IDX to have batches of equal length
+    batch: list of tuples of (src, tgt), where each is 1D tensor
+    """
+    
+    src_batch, tgt_batch = [], []
+    for src_sample, tgt_sample in batch:
+        src_batch.append(src_sample)
+        tgt_batch.append(tgt_sample)
+
+    src_batch = pad_sequence(src_batch, padding_value=PAD_IDX, batch_first=True)
+    tgt_batch = pad_sequence(tgt_batch, padding_value=PAD_IDX, batch_first=True)
+    return src_batch, tgt_batch
+
 # Class definitions
 
 class TextTokenizer:
@@ -93,10 +99,10 @@ class TextTokenizer:
         
         self.str_to_int = vocab
         self.int_to_str = {i:s for s,i in vocab.items()}
-        self.sos_idx = self.vocab[SOS_TOK]
-        self.eos_idx = self.vocab[EOS_TOK]
-        self.pad_idx = self.vocab[PAD_TOK]
-        self.unk_idx = self.vocab[UNK_TOK]
+        self.sos_idx = vocab[SOS_TOK]
+        self.eos_idx = vocab[EOS_TOK]
+        self.pad_idx = vocab[PAD_TOK]
+        self.unk_idx = vocab[UNK_TOK]
     
     
     def encode(self, text):
@@ -208,7 +214,7 @@ class StringReverseDataset(Dataset):
         self.eos_idx = self.tokenizer.eos_idx
         self.pad_idx = self.tokenizer.pad_idx
         self.unk_idx = self.tokenizer.unk_idx
-        self.values = [generate_random_string() for _ in range(n_samples)]
+        self.values = [self.generate_random_string() for _ in range(n_samples)]
         self.labels = [x[::-1] for x in self.values]
 
     def __len__(self):
@@ -221,20 +227,11 @@ class StringReverseDataset(Dataset):
     # Strips off newline, tokenizes, adds SOS and EOS
     def prepare_sample(self, x):
         return torch.tensor([self.sos_idx] + self.tokenizer.encode(x.rstrip("\n")) + [self.eos_idx])
-
-# Functions to fetch DataLoaders
-
-def get_dataloader_text(text, batch_size):
     
-    vocab = get_vocab_from_text(text)
-    tokenizer = TextTokenizer(vocab)
-    d_iter = TextDataset(text, tokenizer)
-    dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
-    return dataloader, tokenizer, vocab
+    def generate_random_string(self):
+        """ 
+        Random strings for dataset generation
+        """
 
-def get_dataloader_reverse(n_samples, batch_size):
-    
-    d_iter = StringReverseDataset(n_samples)
-    tokenizer = StringReverseTokenizer()
-    dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
-    return dataloader, tokenizer, tokenizer.get_vocab()
+        len = np.random.randint(string_reverse_min_len, string_reverse_max_len+1)
+        return ''.join([chr(x) for x in np.random.randint(97, 97+26, len)])

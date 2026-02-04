@@ -166,6 +166,9 @@ def run_experiment_train(model_type=DecoderOnlyLM, task='text_generation', enabl
         # Evaluate
         if task == 'string_reverse':
             val_loss, val_acc, val_gen_acc = evaluate_stringreverse(model, tokenizer, dataloader_val, loss_fn)
+        else:
+            # TODO: impementate evaluation for text generation task
+            val_loss, val_acc, val_gen_acc = (0,0,0)
         
         # Log metrics to wandb
         if enable_wandb:
@@ -175,7 +178,6 @@ def run_experiment_train(model_type=DecoderOnlyLM, task='text_generation', enabl
                 "val_acc": val_acc,
                 "val_loss": val_loss,
                 "val_gen_acc": val_gen_acc,
-                
             }
             wandb_run.log(wandb_metrics)
         
@@ -329,6 +331,7 @@ def train_decoderonly(model, tokenizer, optimizer, loader, loss_fn, epoch):
             
             # Evaluate model and calculate loss
             logits = model(x)
+            
             #print(f"logits: {logits.size()}")
             loss_base = loss_fn(logits.contiguous().view(-1, model.vocab_size), y.contiguous().view(-1))
             
@@ -345,8 +348,9 @@ def train_decoderonly(model, tokenizer, optimizer, loader, loss_fn, epoch):
             
             # Calculate accuracy (only over non-padding tokens)
             preds = logits.argmax(dim=-1)
-            pad_mask = y[:, 1:] != tokenizer.pad_idx
-            preds = (preds == y[:, 1:]) & pad_mask
+            #print(f"preds: {preds.size()}")
+            pad_mask = (y != tokenizer.pad_idx)
+            preds = (preds == y) & pad_mask
             accuracy = preds.sum().float() / pad_mask.sum().float()
             acc += accuracy.item()
             
@@ -375,20 +379,18 @@ def evaluate_stringreverse(model, tokenizer, loader, loss_fn):
     losses = 0
     acc = 0
     gen_acc = 0
-    
-    max_gen_length = 20
 
     for x, y in tqdm(loader, position=0, leave=True):
 
         # Calculate loss
         if isinstance(model, supported_transformer_models):
             logits = model(x, y[:, :-1])
+            loss_base = loss_fn(logits.contiguous().view(-1, model.vocab_size), y[:, 1:].contiguous().view(-1))
         elif isinstance(model, supported_decoderonly_models):
             logits = model(x)
+            loss_base = loss_fn(logits.contiguous().view(-1, model.vocab_size), y.contiguous().view(-1))
         else:
             raise ValueError(f"Model type is not in supported list: {supported_model_types}")
-        
-        loss_base = loss_fn(logits.contiguous().view(-1, model.vocab_size), y[:, 1:].contiguous().view(-1))
         
         # Get any auxiliary losses
         loss_aux = 0
@@ -401,15 +403,20 @@ def evaluate_stringreverse(model, tokenizer, loader, loss_fn):
         
         # Calculate accuracy
         preds = logits.argmax(dim=-1)
-        pad_mask = y[:, 1:] != tokenizer.pad_idx
-        preds = (preds == y[:, 1:]) & pad_mask
+        if isinstance(model, supported_transformer_models):
+            pad_mask = y[:, 1:] != tokenizer.pad_idx
+            preds = (preds == y[:, 1:]) & pad_mask
+        elif isinstance(model, supported_decoderonly_models):
+            pad_mask = (y != tokenizer.pad_idx)
+            preds = (preds == y) & pad_mask
         accuracy = preds.sum().float() / pad_mask.sum().float()
         acc += accuracy.item()
         
         # Calculate generation accuracy i.e. if model can correctly reverse strings
         #print(f"x: {x.size()}")
         #print(f"y: {y.size()}")
-        gen_output = generate_sequence_transformer_batched(model, tokenizer, x=x, max_length=max_gen_length)
+        max_gen_length = x.size(1) # Generate only as long as input
+        gen_output = generate_sequence_batched(model, tokenizer, x=x, max_length=max_gen_length)
         #print(f"gen_output: {gen_output.size()}")
         exact_matches = torch.all(gen_output==y, dim=-1)
         gen_acc += exact_matches.float().mean()
