@@ -11,9 +11,9 @@
 import re
 import numpy as np
 import torch
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
+from datasets import load_dataset
 from config import *
 
 # Special token definitions
@@ -73,6 +73,53 @@ def get_dataloader_reverse(n_samples, batch_size):
     dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
     return dataloader, tokenizer, tokenizer.get_vocab()
 
+def get_data_finewebedu(tokenizer, n_samples=100, enable_wandb=False):
+    
+    data_config = {
+        "dataset_id": "HuggingFaceFW/fineweb-edu",
+        "subset": "sample-10BT",
+        "batch_size": 8,
+        "context_length": 512,
+        "shuffle_buffer": 10000,
+        "n_samples": n_samples,
+    }
+    
+    print(f"Streaming {data_config['dataset_id']} ({data_config['subset']}) (samples: {data_config['n_samples']})...")
+    
+    # Load dataset in streaming mode
+    dataset = load_dataset(
+        data_config["dataset_id"], 
+        #name=data_config["subset"], 
+        split="train", 
+        streaming=True
+    )
+    
+    # Take a small sample of the data
+    dataset = dataset.take(data_config["n_samples"])
+
+    # Shuffle
+    dataset = dataset.shuffle(seed=100, buffer_size=data_config["shuffle_buffer"])
+
+    # Truncates and pads documents
+    def process_batch(examples):
+        return tokenizer(
+            examples["text"],
+            truncation=True,
+            max_length=data_config["context_length"],
+            padding="max_length",
+            return_tensors="pt"
+        )
+
+    # Apply tokenization and format for pytorch
+    tokenized_dataset = dataset.map(
+        process_batch, 
+        batched=True, 
+        remove_columns=["text", "id", "url", "date", "file_path", "dump", "language", "language_score", "token_count"] 
+    )
+    tokenized_dataset = tokenized_dataset.with_format("torch")
+    
+    return tokenized_dataset
+
 def collate_fn(batch):
     """
     Pads inputs with PAD_IDX to have batches of equal length
@@ -87,6 +134,7 @@ def collate_fn(batch):
     src_batch = pad_sequence(src_batch, padding_value=PAD_IDX, batch_first=True)
     tgt_batch = pad_sequence(tgt_batch, padding_value=PAD_IDX, batch_first=True)
     return src_batch, tgt_batch
+
 
 # Class definitions
 

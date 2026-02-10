@@ -21,7 +21,7 @@ n_experts = 64
 ff_dim = 2048 # Hidden dimension of FFNs in basic Transformer
 expert_dim = ff_dim//n_experts # Hidden dimension of expert FFNs
 
-n_samples_train = 100 # Sample counts used for string reverse dataset
+n_samples_train = 10000 # Sample counts used for string reverse dataset
 n_samples_val = 100
 n_samples_test = 10
 

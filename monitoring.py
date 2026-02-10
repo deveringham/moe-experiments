@@ -161,7 +161,7 @@ class MoEProbe:
 class MoEProbeQwen(MoEProbe):
     
     def __init__(self, k=2):
-        super(MoEProbe, self).__init__(k=2)
+        super(MoEProbeQwen, self).__init__(k=2)
     
     # Function used for identifying router modules
     # Designed to work with Qwen MoE models

@@ -1,7 +1,7 @@
 ###
-# experiments.py
+# experiments_nativemodels.py
 #
-# Routines for MoE experiments.
+# Routines for MoE experiments on natively-implemented model architectures.
 # Dylan Everingham
 # 02.02.2026
 ###
@@ -25,7 +25,6 @@ from inference import *
 
 # Supported training tasks
 supported_tasks = [ 'string_reverse', 'text_generation' ]
-
 
 ################################################################################
 
