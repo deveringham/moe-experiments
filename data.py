@@ -78,7 +78,6 @@ def get_data_finewebedu(tokenizer, n_samples=100, enable_wandb=False):
     data_config = {
         "dataset_id": "HuggingFaceFW/fineweb-edu",
         "subset": "sample-10BT",
-        "batch_size": 8,
         "context_length": 512,
         "shuffle_buffer": 10000,
         "n_samples": n_samples,
