@@ -58,6 +58,7 @@ def get_vocab_from_text(text, add_special_tokens=True):
     vocab = {token:idx for idx,token in enumerate(vocab)} # Convert to dict
     return vocab
 
+
 def get_dataloader_text(text, batch_size):
     
     vocab = get_vocab_from_text(text)
@@ -66,6 +67,7 @@ def get_dataloader_text(text, batch_size):
     dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
     return dataloader, tokenizer, vocab
 
+
 def get_dataloader_reverse(n_samples, batch_size):
     
     d_iter = StringReverseDataset(n_samples)
@@ -73,7 +75,8 @@ def get_dataloader_reverse(n_samples, batch_size):
     dataloader = DataLoader(d_iter, batch_size, collate_fn=collate_fn)
     return dataloader, tokenizer, tokenizer.get_vocab()
 
-def get_data_finewebedu(tokenizer, n_samples=100, enable_wandb=False):
+
+def get_data_finewebedu(tokenizer, n_samples=100):
     
     data_config = {
         "dataset_id": "HuggingFaceFW/fineweb-edu",
@@ -88,7 +91,7 @@ def get_data_finewebedu(tokenizer, n_samples=100, enable_wandb=False):
     # Load dataset in streaming mode
     dataset = load_dataset(
         data_config["dataset_id"], 
-        #name=data_config["subset"], 
+        name=data_config["subset"], 
         split="train", 
         streaming=True
     )
@@ -118,6 +121,37 @@ def get_data_finewebedu(tokenizer, n_samples=100, enable_wandb=False):
     tokenized_dataset = tokenized_dataset.with_format("torch")
     
     return tokenized_dataset
+
+
+def get_data_mmlu(n_samples=100, shuffle_seed=100):
+    
+    data_config = {
+        "dataset_id": "cais/mmlu",
+        "subset": "all",
+        "context_length": 128,
+        "shuffle_buffer": 10000,
+        "n_samples": n_samples,
+    }
+    
+    print(f"Streaming {data_config['dataset_id']} ({data_config['subset']}) (samples: {data_config['n_samples']})...")
+    
+    # Load dataset in streaming mode
+    dataset = load_dataset(
+        data_config["dataset_id"], 
+        name=data_config["subset"],
+        split="test", 
+        streaming=True
+    )
+    
+    # Take a small sample of the data
+    dataset = dataset.take(data_config["n_samples"])
+
+    # Shuffle
+    dataset = dataset.shuffle(seed=shuffle_seed, buffer_size=data_config["shuffle_buffer"])
+    
+    dataset = dataset.with_format("torch")
+    return dataset
+
 
 def collate_fn(batch):
     """
