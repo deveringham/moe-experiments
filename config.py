@@ -9,6 +9,7 @@
 import torch
 
 # Hyperparameters
+k = 2
 batch_size = 32
 learning_rate = 3e-4
 embedding_dim = 256 # Embedding dimension

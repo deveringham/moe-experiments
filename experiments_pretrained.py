@@ -11,12 +11,74 @@ import time
 import datetime
 import h5py
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from monitoring import *
 from config import *
 from data import *
 
-eam_data_dir = "./eam_logs/"
+routing_data_dir = "./routing_logs/"
+
+def load_tokenizer_qwen():
+    return AutoTokenizer.from_pretrained("Qwen/Qwen1.5-MoE-A2.7B-Chat")
+
+def load_model_qwen():
+    
+    # Configure 4-bit quantization
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen1.5-MoE-A2.7B-Chat",
+        device_map="auto",
+        dtype=torch.float16,
+        trust_remote_code=False,
+        quantization_config=quantization_config,
+    )
+    tokenizer = load_tokenizer_qwen()
+    return model, tokenizer
+
+def load_tokenizer_deepseek():
+    return AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-V2-Lite-Chat")
+
+def load_model_deepseek():
+    
+    # Configure 4-bit quantization
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16
+    )
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        "deepseek-ai/DeepSeek-V2-Lite-Chat",
+        device_map="auto",
+        dtype=torch.float16,
+        trust_remote_code=False,
+        quantization_config=quantization_config,
+    )
+    tokenizer = load_tokenizer_deepseek()
+    return model, tokenizer
+
+def load_tokenizer_mistral():
+    return AutoTokenizer.from_pretrained("mistralai/Mixtral-8x7B-Instruct-v0.1")
+
+def load_model_mistral():
+    
+    # Configure 4-bit quantization
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16
+    )
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        device_map="auto",
+        dtype=torch.float16,
+        quantization_config=quantization_config,
+    )
+    tokenizer = load_tokenizer_mistral()
+    return model, tokenizer
 
 def chat_generate(model, tokenizer, prompt="", max_new_tokens=100):
         
@@ -45,16 +107,57 @@ def chat_generate(model, tokenizer, prompt="", max_new_tokens=100):
     response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
     return response
 
-def eam_single_generate(model, tokenizer, moe_probe, prompt="", max_new_tokens=100):
+
+def chat_generate_batched(model, tokenizer, prompts, max_new_tokens=100):
+    
+    # Apply chat template to a list of prompts
+    texts = []
+    for prompt in prompts:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        texts.append(text)
+        
+    # Tokenize with padding
+    model_inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True).to(device)
+
+    # Generate output
+    generated_ids = model.generate(
+        input_ids=model_inputs['input_ids'],
+        attention_mask=model_inputs['attention_mask'],
+        max_new_tokens=max_new_tokens,
+        do_sample=False
+    )
+    generated_ids = [
+        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+    ]
+
+    # Decode and return
+    responses = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+    return responses
+
+
+def single_generate(model, tokenizer, moe_probe, prompt="", max_new_tokens=100):
 
     # Clear monitoring probe
     moe_probe.clear()
         
     response = chat_generate(model, tokenizer, prompt=prompt, max_new_tokens=max_new_tokens)
     
-    # Get EAM
-    eam = moe_probe.get_eam()
-    return response, eam
+    # Get metrics
+    probs = moe_probe.get_probs()
+    active_experts = moe_probe.get_active_experts()
+    
+    return response, probs, active_experts
+
+
+def single_generate_noprobe(model, tokenizer, prompt="", max_new_tokens=100):
+        
+    response = chat_generate(model, tokenizer, prompt=prompt, max_new_tokens=max_new_tokens)
+    
+    return response
 
 def save_eam_data(filename, run_id, eam_results):
     
@@ -79,29 +182,62 @@ def save_eam_data(filename, run_id, eam_results):
                 eam_dataset.attrs[key] = value
             
             count += 1
+
+def save_routing_data(filename, run_id, results):
+    
+    with h5py.File(filename, 'w') as f:
+        
+        # For each sample...
+        count = 0
+        for sample in results:
             
-def run_experiment_qwen_mmlu_eam(n_samples, save_samples=100, max_new_tokens=100, shuffle_seed=100):
+            # Store metrics
+            dataset_probs = f.create_dataset(
+                f"probs_{count}",
+                data=sample['probs'].cpu().numpy(), 
+                compression="gzip"
+            )
+            dataset_active_experts = f.create_dataset(
+                f"active_experts_{count}",
+                data=sample['active_experts'].cpu().numpy(), 
+                compression="gzip"
+            )
+            
+            # Store run id
+            f.attrs['run_id'] = run_id
+
+            # Store all other metrics as attributes of prob dataset
+            for key, value in sample['metrics'].items():
+                dataset_probs.attrs[key] = value
+            
+            count += 1
+            
+def run_experiment_mmlu_eam(model_choice, n_samples, start_sample=0, save_samples=100, 
+                            max_new_tokens=100, shuffle_seed=100,
+                            save_results=True, no_probe=False):
+    
+    if no_probe:
+        return run_experiment_mmlu_eam_noprobe(model_choice=model_choice, n_samples=n_samples,
+                                               start_sample=start_sample, save_samples=save_samples,
+                                               max_new_tokens=max_new_tokens, shuffle_seed=shuffle_seed,
+                                               save_results=save_results)
+    
+    # Get model (with attached MoE monitoring probe) and tokenizer
+    if model_choice == "qwen":
+        model, tokenizer = load_model_qwen()
+        probe = MoEProbeQwen(model)
+    elif model_choice == "deepseek":
+        model, tokenizer = load_model_deepseek()
+        probe = MoEProbeDeepSeek(model)
+    elif model_choice == "mistral":
+        model, tokenizer = load_model_mistral()
+        probe = MoEProbeMistral(model)
+    else:
+        raise ValueError("Invalid model_choice. Select 'qwen', 'deepseek', or 'mistral'.")
     
     # Get unique string id for the run
     timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
-    run_id = f"qwen2moe-{timestamp}-samples{n_samples}-tokens{max_new_tokens}"
-    
-    # Figure out intervals at which to save results to file
-    n_saves = (n_samples // save_samples)
-    if (n_samples % save_samples) != 0: n_saves += 1
-    
-    # Get model and tokenizer
-    model = AutoModelForCausalLM.from_pretrained(
-        "Qwen/Qwen1.5-MoE-A2.7B-Chat",
-        dtype="auto",
-        device_map="auto",
-        torch_dtype=torch.float16,
-        trust_remote_code=False
-    )
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen1.5-MoE-A2.7B-Chat")
-    
-    # Attach MoE probe
-    probe = MoEProbeQwen(model)
+    run_id = f"{model_choice}-{timestamp}-samples{n_samples}-tokens{max_new_tokens}"
     
     # Get data
     dataset = get_data_mmlu(n_samples=n_samples, shuffle_seed=shuffle_seed)
@@ -114,56 +250,74 @@ def run_experiment_qwen_mmlu_eam(n_samples, save_samples=100, max_new_tokens=100
     for sample in dataset:
         
         count += 1
-        print(f"Generating response {count}/{n_samples}...")
         
-        prompt = sample['question']
+        # Skip to starting sample
+        if count >= start_sample:
+            print(f"Generating response {count}/{n_samples}...")
 
-        # Generate response and get EAM
-        response, eam = eam_single_generate(model, tokenizer, probe,
-                                            prompt=prompt, max_new_tokens=max_new_tokens)
-        
-        # Store results
-        result = {}
-        result['eam'] = eam
-        result['metrics'] = {
-            'prompt': prompt,
-            'response': response,
-            'prompt_tokenized': tokenizer.encode(prompt),
-            'response_tokenized': tokenizer.encode(response),
-            'subject': sample['subject'],
-        }
-        results.append(result)
-        
-        # Write results to file
-        if (count % save_samples == 0):
-            filename = eam_data_dir + run_id + '-n' + str((count//save_samples)-1) + '.h5'
-            print("Saving outputs to file " + filename)
-            save_eam_data(filename, run_id, results)
-            results = []
+            prompt = sample['question']
+            
+            # Start timing
+            start_time = time.time()
+
+            # Generate response and get metrics
+            response, probs, active_experts = single_generate(model, tokenizer, probe,
+                                                              prompt=prompt, max_new_tokens=max_new_tokens)
+            
+            # Stop timing
+            end_time = time.time()
+            inference_time = end_time - start_time
+            print(f"Inference took {inference_time:.3f}s.")
+
+            # Store results
+            result = {}
+            result['probs'] = probs
+            result['active_experts'] = active_experts
+            result['metrics'] = {
+                'prompt': prompt,
+                'response': response,
+                'prompt_tokenized': tokenizer.encode(prompt),
+                'response_tokenized': tokenizer.encode(response),
+                'subject': sample['subject'],
+                'inference_time': inference_time,
+            }
+            results.append(result)
+
+            # Write results to file
+            if ((count % save_samples == 0) and save_results):
+                filename = routing_data_dir + run_id + '-n' + str((count//save_samples)-1) + '.h5'
+                print("Saving outputs to file " + filename)
+                save_routing_data(filename, run_id, results)
+                results = []
             
     # Write final results
-    if (count % save_samples) != 0:
-        filename = eam_data_dir + run_id + '-n' + str(count//save_samples) + '.h5'
+    if ((count % save_samples) and save_results) != 0:
+        filename = routing_data_dir + run_id + '-n' + str(count//save_samples) + '.h5'
         print("Saving outputs to file " + filename)
-        save_eam_data(filename, run_id, results)
+        save_routing_data(filename, run_id, results)
         results = []
 
-        
-def run_experiment_qwen_mmlu(n_samples, max_new_tokens=100, shuffle_seed=100):
+    # If not recording results, simply return them
+    if not save_results:
+        return results
+    
+def run_experiment_mmlu_eam_noprobe(model_choice, n_samples, start_sample=0, save_samples=100,
+                                    max_new_tokens=100, shuffle_seed=100,
+                                    save_results=True):
+    
+    # Get model (with attached MoE monitoring probe) and tokenizer
+    if model_choice == "qwen":
+        model, tokenizer = load_model_qwen()
+    elif model_choice == "deepseek":
+        model, tokenizer = load_model_deepseek()
+    elif model_choice == "mistral":
+        model, tokenizer = load_model_mistral()
+    else:
+        raise ValueError("Invalid model_choice. Select 'qwen', 'deepseek', or 'mistral'.")
     
     # Get unique string id for the run
     timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
-    run_id = f"qwen2moe-{timestamp}-samples{n_samples}-tokens{max_new_tokens}"
-    
-    # Get model and tokenizer
-    model = AutoModelForCausalLM.from_pretrained(
-        "Qwen/Qwen1.5-MoE-A2.7B-Chat",
-        dtype="auto",
-        device_map="auto",
-        torch_dtype=torch.float16,
-        trust_remote_code=False
-    )
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen1.5-MoE-A2.7B-Chat")
+    run_id = f"{model_choice}-{timestamp}-samples{n_samples}-tokens{max_new_tokens}"
     
     # Get data
     dataset = get_data_mmlu(n_samples=n_samples, shuffle_seed=shuffle_seed)
@@ -176,28 +330,51 @@ def run_experiment_qwen_mmlu(n_samples, max_new_tokens=100, shuffle_seed=100):
     for sample in dataset:
         
         count += 1
-        print(f"Generating response {count}/{n_samples}...")
         
-        # Time
-        start_time = time.time()
+        # Skip to starting sample
+        if count >= start_sample:
+            print(f"Generating response {count}/{n_samples}...")
 
-        prompt = sample['question']
+            prompt = sample['question']
+            
+            # Start timing
+            start_time = time.time()
 
-        # Generate response
-        response = chat_generate(model, tokenizer, prompt=prompt, max_new_tokens=max_new_tokens)
-        
-        # Store results
-        result = {
-            'prompt': prompt,
-            'response': response,
-            'prompt_tokenized': tokenizer.encode(prompt),
-            'response_tokenized': tokenizer.encode(response),
-            'subject': sample['subject'],
-        }
-        results.append(result)
-        
-        # Stop timing
-        end_time = time.time()
-        print(f"{end_time - start_time:.3f}s")
-   
-    return results
+            # Generate response and get metrics
+            response = single_generate_noprobe(model, tokenizer,
+                                               prompt=prompt, max_new_tokens=max_new_tokens)
+            
+            # Stop timing
+            end_time = time.time()
+            inference_time = end_time - start_time
+            print(f"Inference took {inference_time:.3f}s.")
+
+            # Store results
+            result = {}
+            result['metrics'] = {
+                'prompt': prompt,
+                'response': response,
+                'prompt_tokenized': tokenizer.encode(prompt),
+                'response_tokenized': tokenizer.encode(response),
+                'subject': sample['subject'],
+                'inference_time': inference_time,
+            }
+            results.append(result)
+
+            # Write results to file
+            if ((count % save_samples == 0) and save_results):
+                filename = routing_data_dir + run_id + '-n' + str((count//save_samples)-1) + '.h5'
+                print("Saving outputs to file " + filename)
+                save_routing_data(filename, run_id, results)
+                results = []
+            
+    # Write final results
+    if ((count % save_samples) and save_results) != 0:
+        filename = routing_data_dir + run_id + '-n' + str(count//save_samples) + '.h5'
+        print("Saving outputs to file " + filename)
+        save_routing_data(filename, run_id, results)
+        results = []
+    
+    # If not recording results, simply return them
+    if not save_results:
+        return results
