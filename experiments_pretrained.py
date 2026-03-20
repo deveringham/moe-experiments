@@ -160,7 +160,6 @@ def single_generate_noprobe(model, tokenizer, prompt="", max_new_tokens=100):
     return response
 
 def save_eam_data(filename, run_id, eam_results):
-    
     with h5py.File(filename, 'w') as f:
         
         # For each sample...

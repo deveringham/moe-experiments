@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-# Default implementation for native models
+# MoE hook: attaches an arbitrary hook to router modules
 class MoEHook:
     
     def __init__(self, model, n_experts=64, k=2):
@@ -33,35 +33,16 @@ class MoEHook:
         # Get names of all model routers, sorted by layer
         all_names = [r["name"] for r in self.routers.values()]
         self.router_names_sorted = sorted(all_names, key=self._get_router_sorted_id_by_name)
-        print(self.router_names_sorted)
         
         print(f"MoEHook: Model has {self.n_routers} routers each with {self.n_experts} experts and selects k={self.k} at each layer.")
     
-    # Default function used for identifying router modules
-    # Designed to work with the custom MoE implementation from moe.py
-    def attach_fn(self, name, module):
-        return name.endswith(".gating_func")
-    
-    # Get router module names, ordered by layer
-    # Designed to work with the custom MoE implementation from moe.py
-    def _get_router_sorted_id_by_name(self, name):
-        match = re.search(r'\d+', name)
-        if match == None:
-            return 0
-        router_id = int(match.group())
-
-        # if it's a decoder, put it later in the list than the encoders
-        if re.search(r'decoder', name) != None:
-            router_id += self.n_routers
-        return router_id
-    
     # Helper function to get router module for a particular layer id,
     # that is, the position of its name in router_names_sorted
-    def _get_router_module(self, layer_id):
-        name = self.router_names_sorted[layer_id]
+    def _get_router_module(self, router_id):
+        name = self.router_names_sorted[router_id]
         module = None
         for m in self.routers.keys():
-            if self.routers[module]["name"] == name:
+            if self.routers[m]["name"] == name:
                 module = m
                 break
         if module == None:
@@ -88,7 +69,35 @@ class MoEHook:
                 }
         self.n_routers = len(self.routers)
         print(f"MoEHook: Attached probes to {self.n_routers} router layers.")
+    
+    def get_n_experts(self):
+        return self.n_experts
+    def get_n_routers(self):
+        return self.n_routers
+    def get_k(self):
+        return self.k
+    
 
+# Implentation for native models from moe.py
+class MoEHookNative(MoEHook):
+    
+    # Function used for identifying router modules
+    def attach_fn(self, name, module):
+        return name.endswith(".gating_func")
+    
+    # Get router module names, ordered by layer
+    def _get_router_sorted_id_by_name(self, name):
+        match = re.search(r'\d+', name)
+        if match == None:
+            return 0
+        router_id = int(match.group())
+
+        # if it's a decoder, put it later in the list than the encoders
+        if re.search(r'decoder', name) != None:
+            router_id += self.n_routers
+        return router_id
+
+    
 # Implentation for Qwen MoE models ex. Qwen1.5-MoE-A2.7B-Chat
 class MoEHookQwen(MoEHook):
     
@@ -126,6 +135,7 @@ class MoEHookDeepSeek(MoEHook):
         router_id = int(match.group())
         return router_id
 
+    
 # Implentation for Mistral MoE models ex. Mixtral-8x7B-Instruct-v0.1
 class MoEHookMistral(MoEHook):
     

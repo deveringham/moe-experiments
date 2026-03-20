@@ -16,9 +16,10 @@ from collections import Counter
 from transformers import AutoConfig
 from moe_hooks import *
 
-# MoE monitoring probe. Attaches a callback to routing modules which computes routing metrics
-class MoEProbe(MoEHook):
 
+# MoE monitoring probe: attaches a callback to routing modules which computes routing metrics
+class MoEProbe(MoEHook):
+    
     def __init__(self, model, n_experts=64, k=2):
         
         super(MoEProbe, self).__init__(model, n_experts=n_experts, k=k)
@@ -27,8 +28,76 @@ class MoEProbe(MoEHook):
                         # indexed by layer name
         self.most_recent = {} # Holds per-router metrics for most recent activation
     
-    # Default function used for extracting router metrics
-    # Designed to work with the custom MoE implementation from moe.py
+    # Clears monitoring logs
+    def clear(self):
+        self.logs = {}
+        self.most_recent = {}
+
+    def print_count(self):
+        print(f"MoEProbe: Captured {len(self.logs)} routing events from {self.n_routers} router modules.")
+        
+    # get expert activation matrix (EAM)
+    # EAM has dimensions [generated_tokens, n_experts, n_routers]
+    def get_eam(self, binary=False):
+        if binary:
+            eam_type = 'eam_binary'
+        else:
+            eam_type = 'eam_probs'
+        
+        eam = torch.stack([torch.cat([l[eam_type] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
+        
+        return eam
+    
+    # get router probabilities
+    def get_probs(self):
+        
+        probs = torch.stack([torch.cat([l['probs'] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
+        return probs
+    
+    # get active experts
+    def get_active_experts(self):
+        
+        active_experts = torch.stack([torch.cat([l['active_experts'] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
+        return active_experts
+    
+    def plot_loadbalance(self, router_id=0, wandb_run=None):
+        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+
+        # Collate data
+        active_experts = self.get_active_experts() # [tokens, k, n_routers]
+        active_experts = active_experts[:, :, router_id].flatten().cpu().tolist()
+            
+        counts = Counter(active_experts)
+        #avg_entropy = np.mean(all_entropies)
+        expert_ids = np.array(range(self.n_experts))
+        count_per_expert = np.array([counts[i] for i in expert_ids])
+        tokens = counts.total()
+        freqs = count_per_expert / tokens
+        expected_freq = 1/self.n_experts
+        ax.bar(expert_ids, freqs, \
+                label=f"tokens: {tokens}", \
+                alpha=0.7)
+
+        ax.set_title("Expert Activation Frequency (Load)")
+        ax.set_xlabel(f"Expert Index (0-{self.n_experts-1})")
+        ax.set_ylabel("Activation Frequency")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.axhline(y=expected_freq, color='red', linestyle='--', linewidth=2, label="expected frequency (1/n_experts)")
+        
+        # Log plot with wandb
+        if wandb_run is not None:
+            wandb_run.log({"Load Balance Plot": fig})
+
+
+# Implentation for native models from moe.py
+class MoEProbeNative(MoEProbe, MoEHookNative):
+    
+    def __init__(self, model, n_experts=64, k=2):
+        super(MoEProbeNative, self).__init__(model, n_experts=n_experts, k=k)
+    
+    # Function used for extracting router metrics
     def hook_fn(self, module, inputs, outputs):
         
         # outputs are the raw logits [batch, seq_len, num_experts]
@@ -76,105 +145,9 @@ class MoEProbe(MoEHook):
             self.logs[name] = [log]
         self.most_recent[name] = log
         
-    def clear(self):
-        self.logs = {}
-        self.most_recent = {}
-
-    def print_count(self):
-        print(f"MoEProbe: Captured {len(self.logs)} routing events from {self.n_routers} router modules.")
-        
-    # get expert activation matrix (EAM)
-    # EAM has dimensions [generated_tokens, n_experts, n_routers]
-    def get_eam(self, binary=False):
-        if binary:
-            eam_type = 'eam_binary'
-        else:
-            eam_type = 'eam_probs'
-        
-        eam = torch.stack([torch.cat([l[eam_type] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
-        
-        return eam
-    
-    # get router probabilities
-    def get_probs(self):
-        
-        probs = torch.stack([torch.cat([l['probs'] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
-        return probs
-    
-    # get active experts
-    def get_active_experts(self):
-        
-        active_experts = torch.stack([torch.cat([l['active_experts'] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
-        return active_experts
-    
-    def plot_loadbalance(self, router_idx=0, wandb_run=None):
-        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-        
-        # Get list of routers
-        routers = sorted(self.logs.keys())
-        
-        # Select single router for which we will plot
-        selected_layer = routers[router_idx]
-
-        # Collate data
-        all_indices = []
-        all_entropies = []
-        for log in self.logs[selected_layer]:
-            all_indices.extend(log['active_experts'])
-            all_entropies.append(log['entropy'])
             
-        counts = Counter(all_indices)
-        avg_entropy = np.mean(all_entropies)
-        expert_ids = np.array(sorted(counts.keys()))
-        count_per_expert = np.array([counts[i] for i in expert_ids])
-        tokens = counts.total()
-        freqs = count_per_expert / tokens
-        ax.bar(expert_ids, freqs, \
-                label='tokens: %d entropy: %2.4f' % (tokens, avg_entropy), \
-                alpha=0.7)
-
-        ax.set_title("Expert Activation Frequency (Load)")
-        ax.set_xlabel(f"Expert Index (0-{self.n_experts})")
-        ax.set_ylabel("Activation Frequency")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        
-        # Log plot with wandb
-        if wandb_run is not None:
-            wandb_run.log({"Load Balance Plot": fig})
-            
-    # plot of expert activation matrix in binary mask form
-    def plot_eam_perrouter(self, router_idx=0, binary=False):
-        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
-        name = self.router_names_sorted[router_idx]
-        eam = self.get_eam(binary=binary)
-        eam = eam[:,:,router_idx]
-        eam = torch.transpose(eam, 0, 1)
-        
-        # Draw a line to separate prefill and decoding stages
-        prompt_len = self.logs[name][0]['eam_binary'].shape[0]
-        plt.axvline(x=prompt_len, color='red', linestyle='--', linewidth=2, label="Gen Start")
-        
-        sns.heatmap(eam, cmap="Blues", cbar=False, cbar_kws={'label': 'Active'})
-        plt.title(f"Expert Activation Matrix (Layer {name})\nPrompt Prefill + Generated Tokens")
-        plt.xlabel("Token Position (Time)")
-        plt.ylabel("Expert ID")
-        plt.legend()
-   
-    # plot of expert activation for a single token across all router layers
-    def plot_eam_pertoken(self, token_idx=0, binary=False):
-        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
-        eam = self.get_eam(binary=binary)
-        eam = eam[token_idx,:,:]
-        
-        sns.heatmap(eam, cmap="Blues", cbar=False, cbar_kws={'label': 'Active'})
-        plt.title(f"Expert Activation Matrix (Token Position {token_idx})")
-        plt.xlabel("MoE Layer ID")
-        plt.ylabel("Expert ID")
-        
-# MoE monitoring probe specialized for Qwen MoE models
-class MoEProbeQwen(MoEHookQwen):
+# Implentation for Qwen MoE models ex. Qwen1.5-MoE-A2.7B-Chat
+class MoEProbeQwen(MoEProbe, MoEHookQwen):
     
     def __init__(self, model):
 
@@ -230,44 +203,10 @@ class MoEProbeQwen(MoEHookQwen):
         else:
             self.logs[name] = [log]
         self.most_recent[name] = log
-        
-    def plot_loadbalance(self, router_idx=0, wandb_run=None):
-        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-        
-        # Select single router for which we will plot
-        name = self.router_names_sorted[router_idx]
-
-        # Collate data
-        all_indices = []
-        all_entropies = []
-        for log in self.logs[name]:
-            all_indices.extend(log['active_experts'])
-            all_entropies.append(log['entropy'])
-            
-        counts = Counter(all_indices)
-        avg_entropy = np.mean(all_entropies)
-        expert_ids = np.array(sorted(counts.keys()))
-        count_per_expert = np.array([counts[i] for i in expert_ids])
-        tokens = counts.total()
-        freqs = count_per_expert / tokens
-        ax.bar(expert_ids, freqs, \
-                label='tokens: %d entropy: %2.4f' % (tokens, avg_entropy), \
-                alpha=0.7)
-
-        ax.set_title("Expert Activation Frequency (Load)")
-        ax.set_xlabel(f"Expert Index (0-{self.n_experts})")
-        ax.set_ylabel("Activation Frequency")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        
-        # Log plot with wandb
-        if wandb_run is not None:
-            wandb_run.log({"Load Balance Plot": fig})
 
 
-# MoE monitoring probe specialized for DeepSeek MoE models
-class MoEProbeDeepSeek(MoEHookDeepSeek):
+# Implentation for DeepSeek MoE models ex. DeepSeek-V2-Lite-Chat
+class MoEProbeDeepSeek(MoEProbe, MoEHookDeepSeek):
     
     def __init__(self, model):
 
@@ -282,13 +221,14 @@ class MoEProbeDeepSeek(MoEHookDeepSeek):
             shared_size = model.config.shared_expert_intermediate_size
             n_shared_experts = model.config.n_share_experts
             routed_size = model.config.moe_intermediate_size
-            print(f"MoEProbe: Qwen1.5-MoE-A2.7B model also has {n_shared_experts} shared experts with the same intermediate size: {shared_size} (Compared to {routed_size} for routed experts)")
+            print(f"MoEProbe: DeepSeek-V2-Lite-Chat model also has {n_shared_experts} shared experts with the same intermediate size: {shared_size} (Compared to {routed_size} for routed experts)")
     
     # Function used for extracting router metrics
     # Mostly the same as Qwen, but DeepSeek routers return the topk expert indices directly as a second return value
     def hook_fn(self, module, inputs, outputs):
         
-        # outputs are the raw logits [batch * seq_len, n_experts]
+        # DeepSeek router outputs: tuple of tokp indices and logits
+        # each of size [batch * seq_len, k]
         topk_indices, router_logits = outputs
         
         # Calculate probabilities
@@ -325,10 +265,10 @@ class MoEProbeDeepSeek(MoEHookDeepSeek):
         else:
             self.logs[name] = [log]
         self.most_recent[name] = log
-
         
-# MoE monitoring probe specialized for Mixtral models
-class MoEProbeMistral(MoEHookMistral):
+        
+# Implentation for Mistral MoE models ex. Mixtral-8x7B-Instruct-v0.1
+class MoEProbeMistral(MoEProbe, MoEHookMistral):
     
     def __init__(self, model):
 
