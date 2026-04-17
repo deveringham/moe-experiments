@@ -18,10 +18,10 @@ from data import *
 
 routing_data_dir = "./routing_logs/"
 
-def load_tokenizer_qwen():
+def load_tokenizer_qwen_bitsandbytes():
     return AutoTokenizer.from_pretrained("Qwen/Qwen1.5-MoE-A2.7B-Chat")
 
-def load_model_qwen():
+def load_model_qwen_bitsandbytes():
     
     # Configure 4-bit quantization
     quantization_config = BitsAndBytesConfig(
@@ -36,13 +36,27 @@ def load_model_qwen():
         trust_remote_code=False,
         quantization_config=quantization_config,
     )
-    tokenizer = load_tokenizer_qwen()
+    tokenizer = load_tokenizer_qwen_bitsandbytes()
     return model, tokenizer
 
-def load_tokenizer_deepseek():
+def load_tokenizer_qwen_gptq():
+    return AutoTokenizer.from_pretrained("Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4")
+
+def load_model_qwen_gptq():
+
+    model = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4",
+        device_map="auto",
+        #dtype=torch.float16,
+        trust_remote_code=False,
+    )
+    tokenizer = load_tokenizer_qwen_gptq()
+    return model, tokenizer
+
+def load_tokenizer_deepseek_bitsandbytes():
     return AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-V2-Lite-Chat")
 
-def load_model_deepseek():
+def load_model_deepseek_bitsandbytes():
     
     # Configure 4-bit quantization
     quantization_config = BitsAndBytesConfig(
@@ -57,13 +71,13 @@ def load_model_deepseek():
         trust_remote_code=False,
         quantization_config=quantization_config,
     )
-    tokenizer = load_tokenizer_deepseek()
+    tokenizer = load_tokenizer_deepseek_bitsandbytes()
     return model, tokenizer
 
-def load_tokenizer_mistral():
+def load_tokenizer_mistral_bitsandbytes():
     return AutoTokenizer.from_pretrained("mistralai/Mixtral-8x7B-Instruct-v0.1")
 
-def load_model_mistral():
+def load_model_mistral_bitsandbytes():
     
     # Configure 4-bit quantization
     quantization_config = BitsAndBytesConfig(
@@ -77,7 +91,7 @@ def load_model_mistral():
         dtype=torch.float16,
         quantization_config=quantization_config,
     )
-    tokenizer = load_tokenizer_mistral()
+    tokenizer = load_tokenizer_mistral_bitsandbytes()
     return model, tokenizer
 
 def chat_generate(model, tokenizer, prompt="", max_new_tokens=100):
@@ -225,6 +239,9 @@ def run_experiment_mmlu_eam(model_choice, n_samples, start_sample=0, save_sample
     if model_choice == "qwen":
         model, tokenizer = load_model_qwen()
         probe = MoEProbeQwen(model)
+    elif model_choice == "qwen_gptq":
+        model, tokenizer = load_model_qwen_gptq()
+        probe = MoEProbeQwen(model)
     elif model_choice == "deepseek":
         model, tokenizer = load_model_deepseek()
         probe = MoEProbeDeepSeek(model)
@@ -232,7 +249,7 @@ def run_experiment_mmlu_eam(model_choice, n_samples, start_sample=0, save_sample
         model, tokenizer = load_model_mistral()
         probe = MoEProbeMistral(model)
     else:
-        raise ValueError("Invalid model_choice. Select 'qwen', 'deepseek', or 'mistral'.")
+        raise ValueError("Invalid model_choice. Select 'qwen_bitsandbytes', 'qwen_gptq', 'deepseek_bitsandbytes_bitsandbytes', or 'mistral_bitsandbytes'.")
     
     # Get unique string id for the run
     timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
@@ -305,14 +322,16 @@ def run_experiment_mmlu_eam_noprobe(model_choice, n_samples, start_sample=0, sav
                                     save_results=True):
     
     # Get model (with attached MoE monitoring probe) and tokenizer
-    if model_choice == "qwen":
-        model, tokenizer = load_model_qwen()
-    elif model_choice == "deepseek":
-        model, tokenizer = load_model_deepseek()
-    elif model_choice == "mistral":
-        model, tokenizer = load_model_mistral()
+    if model_choice == "qwen_bitsandbytes":
+        model, tokenizer = load_model_qwen_bitsandbytes()
+    elif model_choice == "qwen_gptq":
+        model, tokenizer = load_model_qwen_gptq()
+    elif model_choice == "deepseek_bitsandbytes":
+        model, tokenizer = load_model_deepseek_bitsandbytes()
+    elif model_choice == "mistral_bitsandbytes":
+        model, tokenizer = load_model_mistral_bitsandbytes()
     else:
-        raise ValueError("Invalid model_choice. Select 'qwen', 'deepseek', or 'mistral'.")
+        raise ValueError("Invalid model_choice. Select 'qwen_bitsandbytes', 'qwen_gptq', 'deepseek_bitsandbytes_bitsandbytes', or 'mistral_bitsandbytes'.")
     
     # Get unique string id for the run
     timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
