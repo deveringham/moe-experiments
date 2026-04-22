@@ -274,14 +274,14 @@ def run_experiment_mmlu_eam(model_choice, n_samples, start_sample=0, save_sample
             prompt = sample['question']
             
             # Start timing
-            start_time = time.time()
+            start_time = time.perf_counter()
 
             # Generate response and get metrics
             response, probs, active_experts = single_generate(model, tokenizer, probe,
                                                               prompt=prompt, max_new_tokens=max_new_tokens)
             
             # Stop timing
-            end_time = time.time()
+            end_time = time.perf_counter()
             inference_time = end_time - start_time
             print(f"Inference took {inference_time:.3f}s.")
 
@@ -356,14 +356,14 @@ def run_experiment_mmlu_eam_noprobe(model_choice, n_samples, start_sample=0, sav
             prompt = sample['question']
             
             # Start timing
-            start_time = time.time()
+            start_time = time.perf_counter()
 
             # Generate response and get metrics
             response = single_generate_noprobe(model, tokenizer,
                                                prompt=prompt, max_new_tokens=max_new_tokens)
             
             # Stop timing
-            end_time = time.time()
+            end_time = time.perf_counter()
             inference_time = end_time - start_time
             print(f"Inference took {inference_time:.3f}s.")
 

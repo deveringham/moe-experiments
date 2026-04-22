@@ -48,17 +48,58 @@ class MoEProbe(MoEHook):
         
         return eam
     
+    """
     # get router probabilities
     def get_probs(self):
         
         probs = torch.stack([torch.cat([l['probs'] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
         return probs
+    """
     
+    # get router probabilities
+    def get_probs(self, batch_size=1):
+        
+        all_routers_probs = []
+        for n in self.router_names_sorted:
+            
+            # Reshape each step to [batch, seq, n_experts] and cat along seq dimension
+            unflattened_logs = []
+            for l in self.logs[n]:
+                
+                step_probs = l['probs'] # [batch * seq_len, n_experts]
+                seq_len = step_probs.shape[0] // batch_size
+                unflattened_logs.append(step_probs.view(batch_size, seq_len, self.n_experts))
+                
+            router_seq_probs = torch.cat(unflattened_logs, dim=1) # [batch, total_seq_len, n_experts]
+            all_routers_probs.append(router_seq_probs)
+            
+        # [batch, padded_seq_len, n_experts, n_routers]
+        # stacking here works for different seq_len due to padding from HF
+        return torch.stack(all_routers_probs, dim=-1).cpu()
+    
+    """
     # get active experts
     def get_active_experts(self):
         
         active_experts = torch.stack([torch.cat([l['active_experts'] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
         return active_experts
+    """
+    
+    # get active experts
+    def get_active_experts(self, batch_size=1):
+        all_routers_experts = []
+        for n in self.router_names_sorted:
+            unflattened_logs = []
+            for l in self.logs[n]:
+                step_experts = l['active_experts'] # [batch * seq_len, k]
+                seq_len = step_experts.shape[0] // batch_size
+                unflattened_logs.append(step_experts.view(batch_size, seq_len, self.k))
+                
+            router_seq_experts = torch.cat(unflattened_logs, dim=1)
+            all_routers_experts.append(router_seq_experts)
+            
+        # [batch, padded_seq_len, k, n_routers]
+        return torch.stack(all_routers_experts, dim=-1).cpu()
     
     def plot_loadbalance(self, router_id=0, wandb_run=None):
         fig, ax = plt.subplots(1, 1, figsize=(10, 5))
@@ -134,7 +175,7 @@ class MoEProbeNative(MoEProbe, MoEHookNative):
         name = self.routers[module]["name"]
         log = {
             "entropy": entropy.item().cpu(),
-            "active_experts": active_experts,
+            "active_experts": active_experts.cpu(),
             "eam_binary": eam_binary.cpu(),
             "eam_probs": eam_probs.cpu(),
             #"logits": logits.detach().cpu()
@@ -192,12 +233,14 @@ class MoEProbeQwen(MoEProbe, MoEHookQwen):
         name = self.routers[module]["name"]
         log = {
             "entropy": entropy.item(),
-            "active_experts": topk_indices.flatten().cpu(),
+            "active_experts": topk_indices.squeeze().cpu(),
             #"eam_binary": eam_binary.cpu(),
             #"eam_probs": eam_probs.float().cpu(),
             #"logits": logits.detach().cpu(),
-            "probs": probs.detach().cpu(),
+            "probs": probs.squeeze().detach().cpu(),
         }
+        #print(f"probs:{log['probs'].size()}")
+        #print(f"active_experts:{log['active_experts'].size()}")
         if name in self.logs:
             self.logs[name].append(log)
         else:
