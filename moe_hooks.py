@@ -9,9 +9,6 @@
 # Dependencies
 import re
 import torch
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
 
 # MoE hook: attaches an arbitrary hook to router modules
 class MoEHook:

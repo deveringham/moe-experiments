@@ -3,7 +3,7 @@
 #
 # Classes for monitoring experiments.
 # Dylan Everingham
-# 22.01.2026
+# 30.04.2026
 ###
 
 # Dependencies
@@ -48,14 +48,6 @@ class MoEProbe(MoEHook):
         
         return eam
     
-    """
-    # get router probabilities
-    def get_probs(self):
-        
-        probs = torch.stack([torch.cat([l['probs'] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
-        return probs
-    """
-    
     # get router probabilities
     def get_probs(self, batch_size=1):
         
@@ -76,14 +68,6 @@ class MoEProbe(MoEHook):
         # [batch, padded_seq_len, n_experts, n_routers]
         # stacking here works for different seq_len due to padding from HF
         return torch.stack(all_routers_probs, dim=-1).cpu()
-    
-    """
-    # get active experts
-    def get_active_experts(self):
-        
-        active_experts = torch.stack([torch.cat([l['active_experts'] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
-        return active_experts
-    """
     
     # get active experts
     def get_active_experts(self, batch_size=1):
@@ -158,10 +142,6 @@ class MoEProbeNative(MoEProbe, MoEHookNative):
         eam_binary.scatter_(2, topk_indices, 1)
         eam_probs = torch.zeros_like(outputs)
         eam_probs.scatter_(2, topk_indices, topk_values)
-        
-        # f_i: fraction of tokens routed to each expert
-        #expert_mask = torch.ceil(sparse_routing_weights) # [batch, n_experts]
-        #tokens_per_expert = torch.mean(expert_mask, dim=0) # [n_experts]
 
         # P_i: mean router probability over tokens for each expert
         router_prob_per_expert = torch.mean(routing_weights, dim=0) # [n_experts]
@@ -178,7 +158,6 @@ class MoEProbeNative(MoEProbe, MoEHookNative):
             "active_experts": active_experts.cpu(),
             "eam_binary": eam_binary.cpu(),
             "eam_probs": eam_probs.cpu(),
-            #"logits": logits.detach().cpu()
         }
         if name in self.logs:
             self.logs[name].append(log)
@@ -222,25 +201,14 @@ class MoEProbeQwen(MoEProbe, MoEHookQwen):
         # Manually recalculate top-k
         topk_values, topk_indices = torch.topk(probs, self.k, dim=-1)
         
-        # Format expert activation also as a matrix to track per-request / per-token
-        # Include a binary mask as well as one containing actual probabilities (for top-k experts, zero elsewhere)
-        #eam_binary = torch.zeros_like(outputs, dtype=torch.int8)
-        #eam_binary.scatter_(1, topk_indices, 1)
-        #eam_probs = torch.zeros_like(outputs)
-        #eam_probs.scatter_(1, topk_indices, topk_values)
-        
         # Store lightweight statistics (move to cpu to save vram)
         name = self.routers[module]["name"]
         log = {
             "entropy": entropy.item(),
             "active_experts": topk_indices.squeeze().cpu(),
-            #"eam_binary": eam_binary.cpu(),
-            #"eam_probs": eam_probs.float().cpu(),
-            #"logits": logits.detach().cpu(),
             "probs": probs.squeeze().detach().cpu(),
         }
-        #print(f"probs:{log['probs'].size()}")
-        #print(f"active_experts:{log['active_experts'].size()}")
+        
         if name in self.logs:
             self.logs[name].append(log)
         else:
@@ -282,25 +250,11 @@ class MoEProbeDeepSeek(MoEProbe, MoEHookDeepSeek):
         # Low entropy = Strong specialization
         entropy = -torch.sum(probs * torch.log(probs + 1e-9), dim=-1).mean()
         
-        # Metric: expert activation (Load)
-        # Manually recalculate top-k
-        #topk_values, topk_indices = torch.topk(probs, self.k, dim=-1)
-        
-        # Format expert activation also as a matrix to track per-request / per-token
-        # Include a binary mask as well as one containing actual probabilities (for top-k experts, zero elsewhere)
-        #eam_binary = torch.zeros_like(outputs, dtype=torch.int8)
-        #eam_binary.scatter_(1, topk_indices, 1)
-        #eam_probs = torch.zeros_like(outputs)
-        #eam_probs.scatter_(1, topk_indices, topk_values)
-        
         # Store lightweight statistics (move to cpu to save vram)
         name = self.routers[module]["name"]
         log = {
             "entropy": entropy.item(),
             "active_experts": topk_indices.cpu(),
-            #"eam_binary": eam_binary.cpu(),
-            #"eam_probs": eam_probs.float().cpu(),
-            #"logits": logits.detach().cpu(),
             "probs": probs.detach().cpu(),
         }
         if name in self.logs:
@@ -343,21 +297,11 @@ class MoEProbeMistral(MoEProbe, MoEHookMistral):
         # Manually recalculate top-k
         topk_values, topk_indices = torch.topk(probs, self.k, dim=-1)
         
-        # Format expert activation also as a matrix to track per-request / per-token
-        # Include a binary mask as well as one containing actual probabilities (for top-k experts, zero elsewhere)
-        #eam_binary = torch.zeros_like(outputs, dtype=torch.int8)
-        #eam_binary.scatter_(1, topk_indices, 1)
-        #eam_probs = torch.zeros_like(outputs)
-        #eam_probs.scatter_(1, topk_indices, topk_values)
-        
         # Store lightweight statistics (move to cpu to save vram)
         name = self.routers[module]["name"]
         log = {
             "entropy": entropy.item(),
             "active_experts": topk_indices.cpu(),
-            #"eam_binary": eam_binary.cpu(),
-            #"eam_probs": eam_probs.float().cpu(),
-            #"logits": logits.detach().cpu(),
             "probs": probs.detach().cpu(),
         }
         if name in self.logs:

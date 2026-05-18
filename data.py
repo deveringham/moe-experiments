@@ -36,6 +36,9 @@ special_tokens = {
     UNK_TOK: UNK_IDX, # Unknown
 }
 
+# MMLU subjects / slices
+MMLU_SUBJECTS = ['abstract_algebra', 'anatomy', 'astronomy', 'business_ethics', 'clinical_knowledge', 'college_biology', 'college_chemistry', 'college_computer_science', 'college_mathematics', 'college_medicine', 'college_physics', 'computer_security', 'conceptual_physics', 'econometrics', 'electrical_engineering', 'elementary_mathematics', 'formal_logic', 'global_facts', 'high_school_biology', 'high_school_chemistry', 'high_school_computer_science', 'high_school_european_history', 'high_school_geography', 'high_school_government_and_politics', 'high_school_macroeconomics', 'high_school_mathematics', 'high_school_microeconomics', 'high_school_physics', 'high_school_psychology', 'high_school_statistics', 'high_school_us_history', 'high_school_world_history', 'human_aging', 'human_sexuality', 'international_law', 'jurisprudence', 'logical_fallacies', 'machine_learning', 'management', 'marketing', 'medical_genetics', 'miscellaneous', 'moral_disputes', 'moral_scenarios', 'nutrition', 'philosophy', 'prehistory', 'professional_accounting', 'professional_law', 'professional_medicine', 'professional_psychology', 'public_relations', 'security_studies', 'sociology', 'us_foreign_policy', 'virology', 'world_religions']
+
 # Helper functions
 
 def get_vocab_from_text(text, add_special_tokens=True):
@@ -123,11 +126,11 @@ def get_data_finewebedu(tokenizer, n_samples=100):
     return tokenized_dataset
 
 
-def get_data_mmlu(n_samples=100, shuffle_seed=100):
+def get_data_mmlu(n_samples=100, shuffle_seed=100, subset="all"):
     
     data_config = {
         "dataset_id": "cais/mmlu",
-        "subset": "all",
+        "subset": subset,
         "context_length": 128,
         "shuffle_buffer": 10000,
         "n_samples": n_samples,
@@ -152,6 +155,28 @@ def get_data_mmlu(n_samples=100, shuffle_seed=100):
     dataset = dataset.with_format("torch")
     return dataset
 
+def format_prompts_mmlu(dataset):
+    
+    messages_list = []
+    for d in dataset:
+        messages = [
+            {
+                "role": "system", 
+                "content": "You are a logical reasoning assistant. You must provide all of your reasoning, explanations, and final answers entirely in English. Do not use any other language."
+            },
+            {
+                "role": "user", 
+                "content": (
+                    f"The following is a multiple-choice question.\n"
+                    f"Question: {d['question']}\n"
+                    f"A) {d['choices'][0]}\nB) {d['choices'][1]}\nC) {d['choices'][2]}\nD) {d['choices'][3]}\n\n"
+                    f"Do not simply output the letter. Think step-by-step, carefully explaining your "
+                    f"reasoning for each option before arriving at the final answer. Your entire response must be strictly in English."
+                )
+            }
+        ]
+        messages_list.append(messages)
+    return messages_list
 
 def collate_fn(batch):
     """
