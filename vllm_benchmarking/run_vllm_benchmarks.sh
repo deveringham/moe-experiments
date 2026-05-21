@@ -2,15 +2,13 @@
 
 # Configuration
 # For full-scale tests use something like: n_prompts 1000, req_rate 20
-#MODEL="Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4"
-#MODEL="Qwen/Qwen1.5-MoE-A2.7B-Chat"
-#MODEL="ModelCloud/DeepSeek-V2-Lite-gptq-4bit"
-#MODEL="TechxGenus/DeepSeek-V2-Lite-Chat-AWQ"
-#MODEL="Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"
-MODEL="microsoft/Phi-mini-MoE-instruct"
-NUM_PROMPTS=10
-NUM_WARMUPS=2
-REQUEST_RATE=10
+#MODEL="Qwen/Qwen1.5-MoE-A2.7B-Chat" # EPLB not supported
+#MODEL="Qwen/Qwen3-30B-A3B" # 60GB
+MODEL="deepseek-ai/DeepSeek-V2-Lite-Chat"
+#MODEL="microsoft/Phi-mini-MoE-instruct" # Non-preferred provider (not working on Ascend)
+NUM_PROMPTS=1000
+NUM_WARMUPS=10
+REQUEST_RATE=20
 PORT=8000
 SEED=43
 
@@ -50,7 +48,7 @@ run_benchmark() {
         echo "-> Pinging..."
         HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${PORT}/v1/models)
         if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "-> Server is online and accepting requests."
+            echo "-> Server up."
             break
         fi
         
@@ -64,10 +62,10 @@ run_benchmark() {
 
     # Run the benchmark client
     echo "-> Running benchmark..."
-    vllm bench serve \
+    NCCL_P2P_DISABLE=1 vllm bench serve \
         --backend vllm \
         --model $MODEL \
-        --dataset-name random \
+        --dataset-name sharegpt \
         --num-prompts $NUM_PROMPTS \
         --request-rate $REQUEST_RATE \
         --result-filename "$metrics_file" \
@@ -90,22 +88,22 @@ run_benchmark() {
 }
 
 # Benchmark matrix
- Format: run_benchmark <GPUs/NPUs> <Scheme_Name> "<vLLM_Args>"
+# Format: run_benchmark <GPUs/NPUs> <Scheme_Name> "<vLLM_Args>"
 
 # 1 GPU/NPU (Baseline - Parallel schemes don't apply to a single device)
-run_benchmark 1 "baseline" "--tensor-parallel-size 1 --data-parallel-size 1"
+#run_benchmark 1 "baseline" "--tensor-parallel-size 1 --data-parallel-size 1"
 
 # 2 GPUs/NPUs
-run_benchmark 2 "tensor"    "--tensor-parallel-size 2 --data-parallel-size 1"
-run_benchmark 2 "data"      "--tensor-parallel-size 1 --data-parallel-size 2"
-run_benchmark 2 "expert"    "--tensor-parallel-size 2 --data-parallel-size 1 --enable-expert-parallel"
-run_benchmark 2 "expert_lb" "--tensor-parallel-size 2 --data-parallel-size 1 --enable-expert-parallel --enable-eplb"
+run_benchmark 2 "tensor"    "--tensor-parallel-size 2 --data-parallel-size 1 --disable-custom-all-reduce"
+run_benchmark 2 "data"      "--tensor-parallel-size 1 --data-parallel-size 2 --disable-custom-all-reduce"
+run_benchmark 2 "expert"    "--tensor-parallel-size 2 --data-parallel-size 1 --disable-custom-all-reduce --enable-expert-parallel"
+run_benchmark 2 "expert_lb" "--tensor-parallel-size 2 --data-parallel-size 1 --disable-custom-all-reduce --enable-expert-parallel --enable-eplb"
 
 # 4 GPUs/NPUs
-run_benchmark 4 "tensor"    "--tensor-parallel-size 4 --data-parallel-size 1"
-run_benchmark 4 "data"      "--tensor-parallel-size 1 --data-parallel-size 4"
-run_benchmark 4 "expert"    "--tensor-parallel-size 4 --data-parallel-size 1 --enable-expert-parallel"
-run_benchmark 4 "expert_lb" "--tensor-parallel-size 4 --data-parallel-size 1 --enable-expert-parallel --enable-eplb"
+run_benchmark 4 "tensor"    "--tensor-parallel-size 4 --data-parallel-size 1 --disable-custom-all-reduce"
+run_benchmark 4 "data"      "--tensor-parallel-size 1 --data-parallel-size 4 --disable-custom-all-reduce"
+run_benchmark 4 "expert"    "--tensor-parallel-size 4 --data-parallel-size 1 --disable-custom-all-reduce --enable-expert-parallel"
+run_benchmark 4 "expert_lb" "--tensor-parallel-size 4 --data-parallel-size 1 --disable-custom-all-reduce --enable-expert-parallel --enable-eplb"
 
 echo "==========================================================="
 echo "All benchmark runs complete."
