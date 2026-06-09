@@ -18,7 +18,7 @@ import seaborn as sns
 import numpy as np
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_expert_parallel=False):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_expert_parallel=False, enable_prefix_caching=False):
     print(f"Starting vLLM server for {model_name}...")
     
     # Command array based on your notebook
@@ -39,6 +39,11 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
     
     if enable_expert_parallel:
         cmd.append("--enable-expert-parallel")
+
+    if enable_prefix_caching:
+        cmd.append("--enable-prefix-caching")
+    else:
+        cmd.append("--no-enable-prefix-caching")
     
     # Start the process, output to current console (stdout/stderr)
     server_process = subprocess.Popen(cmd)
@@ -205,7 +210,7 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
 async def run_experiment_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, concurrency_limit=1024,
                                          max_model_len=1024, batch_size=256, gpu_memory_utilization=0.85,
                                          n_gpus=1, n_warmup_samples=5,
-                                         print_output=False, enable_expert_parallel=False):
+                                         print_output=False, enable_expert_parallel=False, enable_prefix_caching=False):
     server_process = None
     port = 8000
     results = None
@@ -215,7 +220,8 @@ async def run_experiment_vllm_throughput(model, prompts, seed=0, max_new_tokens=
                                            max_model_len=max_model_len,
                                            batch_size=batch_size,
                                            gpu_memory_utilization=gpu_memory_utilization,
-                                           n_gpus=n_gpus, enable_expert_parallel=enable_expert_parallel)
+                                           n_gpus=n_gpus, enable_expert_parallel=enable_expert_parallel,
+                                           enable_prefix_caching=enable_prefix_caching)
 
         # Start client
         client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{port}/v1")
@@ -347,14 +353,14 @@ def plot_hist_prefill_throughput(overall_results, subject_results=None, x_limits
     
     plt.figure(figsize=(10,8))
     
-    overall_throughputs = [r['ttft']/r['num_input_tokens'] for r in overall_results]
+    overall_throughputs = [r['num_input_tokens']/r['ttft'] for r in overall_results]
     overall_avg_throughput = np.mean(overall_throughputs)
     overall_total_requests = len(overall_throughputs)
     all_throughputs = []
     all_throughputs += overall_throughputs
     if subject_results is not None:
         n_subjects = len(subject_results)
-        subject_throughputs = {s:[r['ttft']/r['num_input_tokens'] for r in subject_results[s]] for s in subject_results}
+        subject_throughputs = {s:[r['num_input_tokens']/r['ttft'] for r in subject_results[s]] for s in subject_results}
         subject_avg_throughputs = {s:np.mean(subject_throughputs[s]) for s in subject_throughputs}
         subject_total_requests = {s:len(subject_throughputs[s]) for s in subject_throughputs}
         for s in subject_throughputs:
