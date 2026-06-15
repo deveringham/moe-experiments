@@ -16,10 +16,14 @@ from openai import AsyncOpenAI
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+import os
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
 def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_expert_parallel=False, enable_prefix_caching=False):
     print(f"Starting vLLM server for {model_name}...")
+
+    env = os.environ.copy()
+    env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
     
     # Command array based on your notebook
     cmd = [
@@ -33,7 +37,8 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         "--tensor-parallel-size", str(n_gpus),
         "--data-parallel-size", "1",
         "--seed", str(seed),
-        "--override-generation-config", "{\"temperature\": 0.0}"
+        "--override-generation-config", "{\"temperature\": 0.0}",
+        "--moe-backend", "triton",
         #"--enable-eplb"
     ]
     
@@ -46,7 +51,7 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         cmd.append("--no-enable-prefix-caching")
     
     # Start the process, output to current console (stdout/stderr)
-    server_process = subprocess.Popen(cmd)
+    server_process = subprocess.Popen(cmd, env=env)
     
     # Poll the endpoint for 200 OK
     print("Waiting for server to initialize ...")
