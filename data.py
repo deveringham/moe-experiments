@@ -155,7 +155,7 @@ def get_data_mmlu(n_samples=100, shuffle_seed=100, subset="all"):
     dataset = dataset.with_format("torch")
     return dataset
 
-def format_prompts_mmlu(dataset):
+def format_prompts_mmlu(dataset, prompt_reps=1):
     
     messages_list = []
     for d in dataset:
@@ -175,7 +175,7 @@ def format_prompts_mmlu(dataset):
                 )
             }
         ]
-        messages_list.append(messages)
+        messages_list.append(messages * prompt_reps)
     return messages_list
 
 def collate_fn(batch):
