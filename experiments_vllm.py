@@ -16,14 +16,10 @@ from openai import AsyncOpenAI
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-import os
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
 def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_expert_parallel=False, enable_prefix_caching=False):
     print(f"Starting vLLM server for {model_name}...")
-
-    env = os.environ.copy()
-    env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
     
     # Command array based on your notebook
     cmd = [
@@ -37,8 +33,7 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         "--tensor-parallel-size", str(n_gpus),
         "--data-parallel-size", "1",
         "--seed", str(seed),
-        "--override-generation-config", "{\"temperature\": 0.0}",
-        "--moe-backend", "triton",
+        "--override-generation-config", "{\"temperature\": 0.0}"
         #"--enable-eplb"
     ]
     
@@ -51,7 +46,7 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         cmd.append("--no-enable-prefix-caching")
     
     # Start the process, output to current console (stdout/stderr)
-    server_process = subprocess.Popen(cmd, env=env)
+    server_process = subprocess.Popen(cmd)
     
     # Poll the endpoint for 200 OK
     print("Waiting for server to initialize ...")
@@ -107,8 +102,8 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
             if chunk.choices and chunk.choices[0].delta.content:
                 response_str += chunk.choices[0].delta.content
         
-        # Time of first token (in order to deduct decode form TPOT)
-        if first_token_time is None and chunk.choices and chunk.choices[0].delta.content:
+        # Time of first token (in order to deduct decode fromm TPOT)
+        if first_token_time is None and chunk.choices:
             first_token_time = time.perf_counter()
             
         # The last chunk when using include_usage=True contains the token stats
@@ -278,13 +273,14 @@ def plot_hist_ttfts(overall_results, subject_results=None, x_limits=(1000,20000)
     fixed_bins = np.arange(min_ttft, max_ttft + bin_width_ms, bin_width_ms)
     
     # Plot subjects in blue...
-    result_idx = 0
-    blue_colors = plt.get_cmap('Blues')(np.linspace(0.4, 1.0, n_subjects))
-    for s in subject_ttfts:
-        plt.hist(list(subject_ttfts[s]), bins=fixed_bins,
-                 color=blue_colors[result_idx],
-                 label=f'\'{s}\' ({subject_total_requests[s]} requests)')
-        result_idx += 1
+    if subject_results is not None:
+        result_idx = 0
+        blue_colors = plt.get_cmap('Blues')(np.linspace(0.4, 1.0, n_subjects))
+        for s in subject_ttfts:
+            plt.hist(list(subject_ttfts[s]), bins=fixed_bins,
+                     color=blue_colors[result_idx],
+                     label=f'\'{s}\' ({subject_total_requests[s]} requests)')
+            result_idx += 1
     
     # ...then superimpose overall in red
     plt.hist(list(overall_ttfts), bins=fixed_bins,
@@ -325,17 +321,18 @@ def plot_hist_tpots(overall_results, subject_results=None, x_limits=(0,50), titl
     n_bins = 100
     min_tpot = max(min(all_tpots), x_limits[0])
     max_tpot = min(max(all_tpots), x_limits[1])
-    bin_width_ms = (max_tpot - min_tpot) / n_bins
+    bin_width_ms = min((max_tpot - min_tpot) / n_bins, 1)
     fixed_bins = np.arange(min_tpot, max_tpot + bin_width_ms, bin_width_ms)
     
     # Plot subjects in blue...
-    result_idx = 0
-    blue_colors = plt.get_cmap('Blues')(np.linspace(0.4, 1.0, n_subjects))
-    for s in subject_tpots:
-        plt.hist(list(subject_tpots[s]), bins=fixed_bins,
-                 color=blue_colors[result_idx],
-                 label=f'\'{s}\' ({subject_total_requests[s]} requests)')
-        result_idx += 1
+    if subject_results is not None:
+        result_idx = 0
+        blue_colors = plt.get_cmap('Blues')(np.linspace(0.4, 1.0, n_subjects))
+        for s in subject_tpots:
+            plt.hist(list(subject_tpots[s]), bins=fixed_bins,
+                     color=blue_colors[result_idx],
+                     label=f'\'{s}\' ({subject_total_requests[s]} requests)')
+            result_idx += 1
     
     # ...then superimpose overall in red
     plt.hist(list(overall_tpots), bins=fixed_bins,
@@ -354,7 +351,7 @@ def plot_hist_tpots(overall_results, subject_results=None, x_limits=(0,50), titl
     plt.tight_layout()
     plt.show()
 
-def plot_hist_prefill_throughput(overall_results, subject_results=None, x_limits=(1000,20000), title=None):
+def plot_hist_prefill_throughput(overall_results, subject_results=None, x_limits=(0,20000), title=None):
     
     plt.figure(figsize=(10,8))
     
@@ -379,13 +376,14 @@ def plot_hist_prefill_throughput(overall_results, subject_results=None, x_limits
     fixed_bins = np.arange(min_throughput, max_throughput + bin_width_ms, bin_width_ms)
     
     # Plot subjects in blue...
-    result_idx = 0
-    blue_colors = plt.get_cmap('Blues')(np.linspace(0.4, 1.0, n_subjects))
-    for s in subject_throughputs:
-        plt.hist(list(subject_throughputs[s]), bins=fixed_bins,
-                 color=blue_colors[result_idx],
-                 label=f'\'{s}\' ({subject_total_requests[s]} requests)')
-        result_idx += 1
+    if subject_results is not None:
+        result_idx = 0
+        blue_colors = plt.get_cmap('Blues')(np.linspace(0.4, 1.0, n_subjects))
+        for s in subject_throughputs:
+            plt.hist(list(subject_throughputs[s]), bins=fixed_bins,
+                     color=blue_colors[result_idx],
+                     label=f'\'{s}\' ({subject_total_requests[s]} requests)')
+            result_idx += 1
     
     # ...then superimpose overall in red
     plt.hist(list(overall_throughputs), bins=fixed_bins,

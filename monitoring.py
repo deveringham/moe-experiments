@@ -270,7 +270,7 @@ class MoEProbeMistral(MoEProbe, MoEHookMistral):
     def __init__(self, model):
 
         # Query expert information
-        n_experts = 8 # Mixtral experts set at 8 (see model name)
+        n_experts = model.config.num_local_experts # Mixtral experts set at 8 (see model name)
         k = model.config.num_experts_per_tok
         self.n_routers = model.config.num_hidden_layers
 
