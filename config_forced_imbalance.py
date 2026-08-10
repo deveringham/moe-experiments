@@ -1,7 +1,7 @@
 ###
 # config.py
 #
-# Hyperparameters for MoE experiment runs.
+# Hyperparameters for MoE experiment runs with forced imbalance models.
 # Dylan Everingham
 # 10.08.2026
 ###
@@ -32,9 +32,6 @@ n_warmup_samples = 10
 # Data configuration
 # For full dataset: n_samples = 15000, max_new_tokens = 100, batch_size = 16
 n_samples = 100
-n_subjects = 1
-n_repeat_prompts = 5
-prompt_reps = 1
 
 # Profiling confiuguration
 trace_dir = './vllm_benchmarking/traces/'

@@ -14,7 +14,6 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.distributed.configuration_utils import DistributedConfig
 from monitoring import *
-from config import *
 from data import *
 
 routing_data_dir = "./routing_logs/"
@@ -23,7 +22,7 @@ model_id_deepseek = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 model_id_qwen = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
 model_id_mixtral = "mistralai/Mixtral-8x7B-Instruct-v0.1"
 
-def load_model(model_id, enable_bandb=True, enable_expert_parallel=False):
+def load_model(model_id, max_memory=None, enable_bandb=True):
     
     # Configure 4-bit quantization
     if enable_bandb:
@@ -34,16 +33,13 @@ def load_model(model_id, enable_bandb=True, enable_expert_parallel=False):
     else:
         quantization_config = None
 
-    # Configure expert parallelism
-    distributed_config = DistributedConfig(enable_expert_parallel=enable_expert_parallel)
-
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        #device_map="auto",
+        device_map="auto",
+        max_memory=max_memory,
         dtype=torch.float16,
         trust_remote_code=False,
         quantization_config=quantization_config,
-        distributed_config=distributed_config,
     )
     
     tokenizer = load_tokenizer_qwen_bandb()
