@@ -1,27 +1,28 @@
 ###
-# experiments_vllm.py
+# experiments_throughput_vllm.py
 #
 # Routines for MoE experiments using vLLM serving interface.
 # Dylan Everingham
-# 18.02.2026
+# 06.08.2026
 ###
 
 import torch
 import asyncio
 import time
 import subprocess
+import os
 import urllib.request
 import urllib.error
 from openai import AsyncOpenAI
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+from experiments_pretrained import *
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_expert_parallel=False, enable_prefix_caching=False):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_expert_parallel=False, enable_prefix_caching=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10):
     print(f"Starting vLLM server for {model_name}...")
     
-    # Command array based on your notebook
     cmd = [
         "vllm", "serve", model_name,
         "--port", str(port),
@@ -33,9 +34,13 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         "--tensor-parallel-size", str(n_gpus),
         "--data-parallel-size", "1",
         "--seed", str(seed),
-        "--override-generation-config", "{\"temperature\": 0.0}"
-        #"--enable-eplb"
+        "--override-generation-config", "{\"temperature\": 0.0}",
+        #"--enable-eplb",
     ]
+    
+    if trace_dir:
+        cmd.append("--profiler-config")
+        cmd.append(f'{{"profiler": "torch", "torch_profiler_dir": "{trace_dir}", "active_iterations": {trace_active_iterations}, "delay_iterations": {trace_start_iteration}, "torch_profiler_with_stack": false}}')
     
     if enable_expert_parallel:
         cmd.append("--enable-expert-parallel")
@@ -45,7 +50,6 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
     else:
         cmd.append("--no-enable-prefix-caching")
     
-    # Start the process, output to current console (stdout/stderr)
     server_process = subprocess.Popen(cmd)
     
     # Poll the endpoint for 200 OK
@@ -66,14 +70,32 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
             
     return server_process
 
-# Terminates the vLLM server subprocess.
+# Terminates the vLLM server subprocess
 def stop_vllm_server(server_process):
     print("Shutting down vLLM server...")
     server_process.terminate()
     server_process.wait()
     print("Server successfully shut down.")
 
-# Sends a single streaming request and measures TTFT and TPOT.
+def start_profiling(port=8000):
+    print("Starting vLLM PyTorch Profiler...")
+    req = urllib.request.Request(f"http://localhost:{port}/start_profile", method="POST")
+    try:
+        with urllib.request.urlopen(req) as response:
+            print("Profiler started successfully.")
+    except urllib.error.URLError as e:
+        print(f"Failed to start profiler: {e}")
+
+def stop_profiling(port=8000):
+    print("Stopping vLLM PyTorch Profiler (Note: flushing traces to disk may take a few minutes)...")
+    req = urllib.request.Request(f"http://localhost:{port}/stop_profile", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=600) as response:
+            print("Profiler stopped and traces flushed successfully.")
+    except urllib.error.URLError as e:
+        print(f"Failed to stop profiler: {e}")
+
+# Sends a single streaming request and measures TTFT and TPOT
 async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tokens=100,
                           get_response=False, prompt_formatted=True):
     
@@ -200,7 +222,7 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
             print(f"Total Tokens Generated: {total_tokens}")
             print(f"Overall Server Throughput: {throughput:.2f} tokens/second")
     
-    return results, avg_tpot
+    return results 
 
 # Run full experiment:
 # - Start vLLM server
@@ -210,10 +232,12 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
 async def run_experiment_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, concurrency_limit=1024,
                                          max_model_len=1024, batch_size=256, gpu_memory_utilization=0.85,
                                          n_gpus=1, n_warmup_samples=5,
-                                         print_output=False, enable_expert_parallel=False, enable_prefix_caching=False):
+                                         print_output=False, enable_expert_parallel=False, enable_prefix_caching=False,
+                                         trace_dir=None, trace_active_iterations=2):
     server_process = None
     port = 8000
     results = None
+    n_samples = len(prompts)
     try:
         # Start server
         server_process = start_vllm_server(model, port=port, seed=seed,
@@ -221,7 +245,9 @@ async def run_experiment_vllm_throughput(model, prompts, seed=0, max_new_tokens=
                                            batch_size=batch_size,
                                            gpu_memory_utilization=gpu_memory_utilization,
                                            n_gpus=n_gpus, enable_expert_parallel=enable_expert_parallel,
-                                           enable_prefix_caching=enable_prefix_caching)
+                                           enable_prefix_caching=enable_prefix_caching,
+                                           trace_dir=trace_dir, trace_start_iteration=n_samples//2,
+                                           trace_active_iterations=trace_active_iterations)
 
         # Start client
         client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{port}/v1")
@@ -232,10 +258,16 @@ async def run_experiment_vllm_throughput(model, prompts, seed=0, max_new_tokens=
                         concurrency_limit=concurrency_limit,
                         prompt_formatted=True)
         
+        # Start profiling
+        start_profiling(port=port)
+        
         # Run experiment
         results = await run_batch(client, model, prompts,
                                   seed=seed, print_output=print_output, max_new_tokens=max_new_tokens,
                                   prompt_formatted=True)
+        
+        # Stop profiling
+        stop_profiling(port=port)
 
     except Exception as e:
         print(f"An error occurred during inference: {e}")

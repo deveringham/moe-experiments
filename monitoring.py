@@ -238,7 +238,7 @@ class MoEProbeDeepSeek(MoEProbe, MoEHookDeepSeek):
     # Mostly the same as Qwen, but DeepSeek routers return the topk expert indices directly as a second return value
     def hook_fn(self, module, inputs, outputs):
         
-        # DeepSeek router outputs: tuple of tokp indices and logits
+        # DeepSeek router outputs: tuple of topk indices and logits
         # each of size [batch * seq_len, k]
         topk_indices, router_logits = outputs
         
@@ -270,7 +270,7 @@ class MoEProbeMistral(MoEProbe, MoEHookMistral):
     def __init__(self, model):
 
         # Query expert information
-        n_experts = model.config.num_local_experts # Mixtral experts set at 8 (see model name)
+        n_experts = model.config.num_local_experts
         k = model.config.num_experts_per_tok
         self.n_routers = model.config.num_hidden_layers
 
@@ -282,8 +282,9 @@ class MoEProbeMistral(MoEProbe, MoEHookMistral):
     # Mostly the same as Qwen, but DeepSeek routers return the topk expert indices directly as a second return value
     def hook_fn(self, module, inputs, outputs):
         
-        # outputs are the raw logits [batch * seq_len, n_experts]
-        router_logits = outputs
+        # outputs are tuple containing logist of size [batch * seq_len, n_experts]
+        # and then topk indices
+        router_logits, _, _ = outputs
         
         # Calculate probabilities
         probs = torch.softmax(router_logits, dim=-1)

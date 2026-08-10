@@ -3,40 +3,49 @@
 #
 # Hyperparameters for MoE experiment runs.
 # Dylan Everingham
-# 02.02.2026
+# 10.08.2026
 ###
 
 import torch
 
-# Hyperparameters
-k = 2
-batch_size = 32
-learning_rate = 3e-4
-embedding_dim = 256 # Embedding dimension
-n_heads = 4 # Number of attention heads
-n_encoder_layers = 1 # Number of transformer encoder layers
-n_decoder_layers = 1 # Number of transformer decoder layers
-dropout = 0.1
-n_epochs = 10
-n_experts = 64
-ff_dim = 2048 # Hidden dimension of FFNs in basic Transformer
-expert_dim = ff_dim//n_experts # Hidden dimension of expert FFNs
+# Model configuration
+imbalance_level_low = 0
+imbalance_level_high = 100
+n_layers = 8
+n_local_experts = 8
+k = 1
+model_scale_factor = 1 # Scale the parameter count by multiplying with the intermediate dim
+hidden_size = 2048 
+intermediate_size = 8192 * model_scale_factor
 
-n_samples_train = 10000 # Sample counts used for string reverse dataset
-n_samples_val = 100
-n_samples_test = 10
+# Inference deployment configuration
+port = 8000
+max_new_tokens = 100
+max_model_len = 2048
+gpu_memory_utilization = 0.6
+n_gpus = 2
+enable_expert_parallel = True
+enable_prefix_caching = False
+batch_size = 16
+n_warmup_samples = 10
 
-sampling_context_size = 32 # Context Size used for sliding window sampling
+# Data configuration
+# For full dataset: n_samples = 15000, max_new_tokens = 100, batch_size = 16
+n_samples = 100
+n_subjects = 1
+n_repeat_prompts = 5
+prompt_reps = 1
 
-# String sizes used in string reverse dataset
-string_reverse_min_len = 2
-string_reverse_max_len = 20
+# Profiling confiuguration
+trace_dir = './vllm_benchmarking/traces/'
+trace_id_balanced = f'gpu{n_gpus}_batch{batch_size}_samples{n_samples}_imbalance{imbalance_level_low}_layers{n_layers}_n{n_local_experts}_k{k}_hiddensize{hidden_size}_intermediatesize{intermediate_size}'
+trace_path_balanced = trace_dir + trace_id_balanced
+trace_id_imbalanced = f'gpu{n_gpus}_batch{batch_size}_samples{n_samples}_imbalance{imbalance_level_high}_layers{n_layers}_n{n_local_experts}_k{k}_hiddensize{hidden_size}_intermediatesize{intermediate_size}'
+trace_path_imbalanced = trace_dir + trace_id_imbalanced
 
-# Dictionary containing names and weights of auxiliary loss terms
-auxiliary_losses= {
-    "loss_load_balancing": 0.0,
-    "loss_z": 0.0
-}
+# Output configuration
+results_file_balanced = f'./vllm_benchmarking/results_{trace_id_balanced}.pkl'
+results_file_imbalanced = f'./vllm_benchmarking/results_{trace_id_imbalanced}.pkl'
 
-# Device selection
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# torch device
+device = torch.device("cuda")

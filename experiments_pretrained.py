@@ -12,87 +12,46 @@ import datetime
 import h5py
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers.distributed.configuration_utils import DistributedConfig
 from monitoring import *
 from config import *
 from data import *
 
 routing_data_dir = "./routing_logs/"
 
-def load_tokenizer_qwen_bitsandbytes():
-    return AutoTokenizer.from_pretrained("Qwen/Qwen1.5-MoE-A2.7B-Chat")
+model_id_deepseek = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_id_qwen = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
+model_id_mixtral = "mistralai/Mixtral-8x7B-Instruct-v0.1"
 
-def load_model_qwen_bitsandbytes():
+def load_model(model_id, enable_bandb=True, enable_expert_parallel=False):
     
     # Configure 4-bit quantization
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16
-    )
+    if enable_bandb:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16
+        )
+    else:
+        quantization_config = None
+
+    # Configure expert parallelism
+    distributed_config = DistributedConfig(enable_expert_parallel=enable_expert_parallel)
 
     model = AutoModelForCausalLM.from_pretrained(
-        "Qwen/Qwen1.5-MoE-A2.7B-Chat",
-        device_map="auto",
+        model_id,
+        #device_map="auto",
         dtype=torch.float16,
         trust_remote_code=False,
         quantization_config=quantization_config,
-    )
-    tokenizer = load_tokenizer_qwen_bitsandbytes()
-    return model, tokenizer
-
-def load_tokenizer_qwen_gptq():
-    return AutoTokenizer.from_pretrained("Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4")
-
-def load_model_qwen_gptq():
-
-    model = AutoModelForCausalLM.from_pretrained(
-        "Qwen/Qwen1.5-MoE-A2.7B-Chat-GPTQ-Int4",
-        device_map="auto",
-        #dtype=torch.float16,
-        trust_remote_code=False,
-    )
-    tokenizer = load_tokenizer_qwen_gptq()
-    return model, tokenizer
-
-def load_tokenizer_deepseek_bitsandbytes():
-    return AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-V2-Lite-Chat")
-
-def load_model_deepseek_bitsandbytes():
-    
-    # Configure 4-bit quantization
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16
+        distributed_config=distributed_config,
     )
     
-    model = AutoModelForCausalLM.from_pretrained(
-        "deepseek-ai/DeepSeek-V2-Lite-Chat",
-        device_map="auto",
-        dtype=torch.float16,
-        trust_remote_code=False,
-        quantization_config=quantization_config,
-    )
-    tokenizer = load_tokenizer_deepseek_bitsandbytes()
+    tokenizer = load_tokenizer_qwen_bandb()
     return model, tokenizer
-
-def load_tokenizer_mistral_bitsandbytes():
-    return AutoTokenizer.from_pretrained("mistralai/Mixtral-8x7B-Instruct-v0.1")
-
-def load_model_mistral_bitsandbytes():
     
-    # Configure 4-bit quantization
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16
-    )
-    
-    model = AutoModelForCausalLM.from_pretrained(
-        "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        device_map="auto",
-        dtype=torch.float16,
-        quantization_config=quantization_config,
-    )
-    tokenizer = load_tokenizer_mistral_bitsandbytes()
-    return model, tokenizer
+def load_tokenizer(model_id):
+    return AutoTokenizer.from_pretrained(model_id)
+
 
 def chat_generate(model, tokenizer, prompt="", max_new_tokens=100):
         
@@ -153,10 +112,11 @@ def chat_generate_batched(model, tokenizer, prompts, max_new_tokens=100):
     return responses
 
 
-def single_generate(model, tokenizer, moe_probe, prompt="", max_new_tokens=100):
+def single_generate(model, tokenizer, moe_probe, prompt="", max_new_tokens=100, clear_probe=True):
 
     # Clear monitoring probe
-    moe_probe.clear()
+    if clear_probe:
+        moe_probe.clear()
         
     response = chat_generate(model, tokenizer, prompt=prompt, max_new_tokens=max_new_tokens)
     
