@@ -1,0 +1,10 @@
+vllm
+transformers
+datasets
+matplotlib
+seaborn
+bitsandbytes
+accelerate
+wandb
+notebook
+ipykernel
