@@ -185,7 +185,10 @@ class MoEProbeQwen(MoEProbe, MoEHookQwen):
     
     # Function used for extracting router metrics
     def hook_fn(self, module, inputs, outputs):
+
+        router_logits = outputs
         
+        # for transformers>4.57.3:
         # outputs are tuple containing logits of size [batch * seq_len, n_experts]
         # and then topk indices
         router_logits, _, _  = outputs
@@ -282,10 +285,13 @@ class MoEProbeMistral(MoEProbe, MoEHookMistral):
     # Function used for extracting router metrics
     # Mostly the same as Qwen, but DeepSeek routers return the topk expert indices directly as a second return value
     def hook_fn(self, module, inputs, outputs):
+
+        router_logits = outputs
         
+        # for transformers>4.57.3:
         # outputs are tuple containing logist of size [batch * seq_len, n_experts]
         # and then topk indices
-        router_logits, _, _ = outputs
+        #router_logits, _, _ = outputs
         
         # Calculate probabilities
         probs = torch.softmax(router_logits, dim=-1)

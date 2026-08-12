@@ -35,7 +35,7 @@ def load_model(model_id, max_memory=None, enable_bnb=True):
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         device_map="auto",
-        #max_memory=max_memory,
+        max_memory=max_memory,
         dtype=torch.float16,
         trust_remote_code=False,
         quantization_config=quantization_config,

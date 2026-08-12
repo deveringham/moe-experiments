@@ -12,17 +12,16 @@ from data import *
 # Model configuration
 model_id_deepseek = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 model_id_qwen = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
-model_id_mixtral = "mistralai/Mixtral-8x7B-Instruct-v0.1"
-model_id = model_id_qwen
-model_id_simple = "qwen"
+model_id_mistral = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_id = model_id_mistral
+model_id_simple = "mistral"
 
 # Inference deployment configuration
 port = 8000
 max_new_tokens = 100
 max_model_len = 2048
 gpu_memory_utilization = 0.6
-n_gpus = 8
-max_memory = {i: "11GiB" for i in range(n_gpus)}
+n_gpus = 2
 enable_expert_parallel = True
 enable_prefix_caching = False
 batch_size = 16
