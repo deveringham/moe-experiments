@@ -3,6 +3,7 @@ transformers
 datasets
 matplotlib
 seaborn
+h5py
 bitsandbytes
 accelerate
 wandb

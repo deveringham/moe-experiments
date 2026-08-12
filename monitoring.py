@@ -186,8 +186,9 @@ class MoEProbeQwen(MoEProbe, MoEHookQwen):
     # Function used for extracting router metrics
     def hook_fn(self, module, inputs, outputs):
         
-        # outputs are the raw logits [batch * seq_len, n_experts]
-        router_logits = outputs
+        # outputs are tuple containing logits of size [batch * seq_len, n_experts]
+        # and then topk indices
+        router_logits, _, _  = outputs
         
         # Calculate probabilities
         probs = torch.softmax(router_logits, dim=-1)
@@ -205,8 +206,8 @@ class MoEProbeQwen(MoEProbe, MoEHookQwen):
         name = self.routers[module]["name"]
         log = {
             "entropy": entropy.item(),
-            "active_experts": topk_indices.squeeze().cpu(),
-            "probs": probs.squeeze().detach().cpu(),
+            "active_experts": topk_indices.cpu(),
+            "probs": probs.detach().cpu(),
         }
         
         if name in self.logs:
