@@ -6,6 +6,6 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     && rm -rf /var/lib/apt/lists/*
-RUN git clone https://github.com/deveringham/moe-experiments.git /workspace
-RUN pip install --no-cache-dir -r /moe-experiments/requirements.txt
+RUN git clone https://github.com/deveringham/moe-experiments.git
+RUN pip install --no-cache-dir -r /workspace/moe-experiments/requirements.txt
 CMD ["bash"]
