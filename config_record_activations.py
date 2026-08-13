@@ -18,11 +18,11 @@ model_id_simple = "mistral"
 
 # Data configuration
 # For full dataset: n_samples = 15000
-n_samples = 10
+n_samples = 100
 
 # Inference deployment configuration
 max_new_tokens = 100
-batch_size = 16
+batch_size = 32
 
 # Output configuration
 # Get unique string id for the run

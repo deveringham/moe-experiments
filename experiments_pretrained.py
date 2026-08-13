@@ -45,15 +45,45 @@ def load_tokenizer(model_id):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
-        print(f"load_tokenizer: no pad token defined for {model_id}, using eos_token ({tokenizer.eos_token!r}) as pad_token.").
+        print(f"load_tokenizer: no pad token defined for {model_id}, using eos_token ({tokenizer.eos_token!r}) as pad_token.")
     tokenizer.padding_side = "left"
     return tokenizer
 
+# Function to get mask for valid activations / probabilities after batched
+# activation recording. Masks out prompt padding and post-eos padding
+def get_valid_activation_mask(attention_mask, generated_ids, tokenizer):
+    
+    # attention_mask [batch, padded_prompt_len]
+    # generated_ids [batch, generation_steps]
+    # Returns [batch, padded_prompt_len + generation_steps]
+    
+    eos_ids = tokenizer.eos_token_id
+    if eos_ids is None:
+        eos_ids = []
+    elif not isinstance(eos_ids, (list, tuple)):
+        eos_ids = [eos_ids]
+    eos_ids = set(eos_ids)
+ 
+    batch_size, gen_len = generated_ids.shape
+    step_len = max(gen_len - 1, 0)
+    step_ids = generated_ids[:, :step_len]
 
-def chat_generate(model, tokenizer, probe=None, prompt="", max_new_tokens=100, clear_probe=True, prompt_formatted=True):
+    gen_mask = torch.ones((batch_size, step_len), dtype=torch.bool)
+    for i in range(batch_size):
+        for j in range(step_len):
+            if step_ids[i, j].item() in eos_ids:
+                # Keep the EOS step itself (a genuine forward pass); drop
+                # everything generated after it for this sample.
+                gen_mask[i, j + 1:] = False
+                break
+ 
+    prompt_mask = attention_mask.bool().cpu()
+    return torch.cat([prompt_mask, gen_mask], dim=1)
+
+def chat_generate(model, tokenizer, probe, prompt="", max_new_tokens=100, clear_probe=True, prompt_formatted=True):
 
     # Clear monitoring probe
-    if probe and clear_probe:
+    if clear_probe:
         probe.clear()
         
     # Set chat template and transfer to device
@@ -80,27 +110,24 @@ def chat_generate(model, tokenizer, probe=None, prompt="", max_new_tokens=100, c
         pad_token_id=tokenizer.pad_token_id,
 
     )
-    generated_ids = [
+    generated_ids = torch.stack([
         output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
+    ])
 
     # Decode
     response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
     
     # Get metrics
-    if probe:
-        probs = probe.get_probs()
-        active_experts = probe.get_active_experts()
-        
-        return response, probs, active_experts
-    else:
-        return response, None, None
+    probs = probe.get_probs()
+    active_experts = probe.get_active_experts()
+    
+    return response, probs, active_experts
         
 
-def chat_generate_batched(model, tokenizer, probe=None, prompts=[""], max_new_tokens=100, clear_probe=True, prompt_formatted=True):
+def chat_generate_batched(model, tokenizer, probe, prompts=[""], max_new_tokens=100, clear_probe=True, prompt_formatted=True):
  
     # Clear monitoring probe
-    if probe and clear_probe:
+    if clear_probe:
         probe.clear()
  
     # Apply chat template to a list of prompts
@@ -120,28 +147,29 @@ def chat_generate_batched(model, tokenizer, probe=None, prompts=[""], max_new_to
     model_inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True).to(device)
 
     # Generate output
+    attention_mask=model_inputs['attention_mask']
     generated_ids = model.generate(
         input_ids=model_inputs['input_ids'],
-        attention_mask=model_inputs['attention_mask'],
+        attention_mask=attention_mask,
         pad_token_id=tokenizer.pad_token_id,
         max_new_tokens=max_new_tokens,
         do_sample=False
     )
-    generated_ids = [
+    generated_ids = torch.stack([
         output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
+    ])
 
-    # Decode and return
+    # Decode
     responses = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+
+    # Get mask representing valid activation data i.e. not padding
+    valid_mask = get_valid_activation_mask(attention_mask, generated_ids, tokenizer)
  
-    if probe:
-        batch_size = len(prompts)
-        probs = probe.get_probs(batch_size=batch_size)
-        active_experts = probe.get_active_experts(batch_size=batch_size)
- 
-        return responses, probs, active_experts
-    else:
-        return responses, None, None
+    batch_size = len(prompts)
+    probs = probe.get_probs(batch_size=batch_size)
+    active_experts = probe.get_active_experts(batch_size=batch_size)
+
+    return responses, probs, active_experts, valid_mask
 
 
 def save_routing_data(filename, run_id, results):
@@ -173,72 +201,91 @@ def save_routing_data(filename, run_id, results):
             
             count += 1
             
-def get_activations_mmlu(model, tokenizer, dataset, probe=None, batch_size=1,
-                         max_new_tokens=100):
+def get_activations_mmlu(model, tokenizer, dataset, probe, batch_size=1, max_new_tokens=100):
     
     # Results will contain router logits for each sample plus prompt and response
     results = []
 
     # Formatted prompts
-    prompts = format_prompts_mmlu(dataset, prompt_reps=1)
+    prompts, subjects, questions = format_prompts_mmlu(dataset, prompt_reps=1)
     n_samples = len(prompts)
     
     # For each sample...
-    count = 0
-    for d in dataset:
-    
-        print(f"Generating response {count+1}/{n_samples}...")
+    if batch_size > 1:
         
-        # Start timing
-        start_time = time.perf_counter()
-
-        # Generate response and get metrics
-        response, probs, active_experts = chat_generate(model, tokenizer, probe=probe,
-                                                        prompt=prompts[count], max_new_tokens=max_new_tokens,
-                                                        prompt_formatted=True)
+        # Batched version
+        for batch_start in range(0, n_samples, batch_size):
+            batch_prompts = prompts[batch_start:batch_start + batch_size]
+     
+            print(f"Generating responses {batch_start + 1}-{batch_start + len(batch_prompts)}/{n_samples}...")
+     
+            # Start timing
+            start_time = time.perf_counter()
+     
+            # Generate batch of responses and get metrics + per-sample validity mask
+            responses, probs, active_experts, valid_mask = chat_generate_batched(
+                model, tokenizer, probe, prompts=batch_prompts,
+                max_new_tokens=max_new_tokens, prompt_formatted=True)
+     
+            # Stop timing
+            end_time = time.perf_counter()
+            inference_time = end_time - start_time
+            per_sample_time = inference_time / len(batch_prompts)
+            print(f"Batch inference took {inference_time:.3f}s ({per_sample_time:.3f}s/sample).")
+     
+            # Split the batch back into individual sample results, keeping only
+            # the valid (non-padding, pre/at-EOS) positions of each sample's routing data
+            for i in range(len(batch_prompts)):
+                count = i + batch_start
+                response = responses[i]
+     
+                result = {}
+                sample_mask = valid_mask[i] # [seq_len]
+                result['probs'] = probs[i][sample_mask] # [valid_len, n_experts, n_routers]
+                result['active_experts'] = active_experts[i][sample_mask] # [valid_len, k, n_routers]
+                result['prompt'] = questions[count]
+                result['response'] = responses[i]
+                text = tokenizer.apply_chat_template(prompts[count], tokenize=False, add_generation_prompt=True)
+                result['prompt_tokenized'] = tokenizer([text])
+                result['response_tokenized'] = tokenizer.encode(responses[i])
+                result['subject'] = subjects[count]
+                result['inference_time'] = per_sample_time
+                
+                results.append(result)
+                
+    else:
+        count = 0
+        for d in dataset:
         
-        # Stop timing
-        end_time = time.perf_counter()
-        inference_time = end_time - start_time
-        print(f"Inference took {inference_time:.3f}s / prompt.")
-
-        # Store results
-        result = {}
-        if probe:
-            result['probs'] = probs
-            result['active_experts'] = active_experts       
-        result['prompt'] = d['question']
-        result['response'] = response
-        text = tokenizer.apply_chat_template(prompts[count], tokenize=False, add_generation_prompt=True)
-        result['prompt_tokenized'] = tokenizer([text])
-        result['response_tokenized'] = tokenizer.encode(response)
-        result['subject'] = d['subject']
-        result['inference_time'] = inference_time
-        
-        results.append(result)
-
-        count += 1
-
-        """
-        # Write results to file
-        if ((count % save_samples == 0) and save_results):
-            filename = routing_data_dir + run_id + '-n' + str((count//save_samples)-1) + '.h5'
-            print("Saving outputs to file " + filename)
-            save_routing_data(filename, run_id, results)
-            results = []
+            print(f"Generating response {count+1}/{n_samples}...")
             
-    # Write final results
-    if ((count % save_samples) and save_results) != 0:
-        filename = routing_data_dir + run_id + '-n' + str(count//save_samples) + '.h5'
-        print("Saving outputs to file " + filename)
-        save_routing_data(filename, run_id, results)
-        results = []
-
-    # If not recording results, simply return them
-    if not save_results:
-        return results
-    """
-
-    # Batched version TBD
+            # Start timing
+            start_time = time.perf_counter()
+    
+            # Generate response and get metrics
+            response, probs, active_experts = chat_generate(model, tokenizer, probe,
+                                                            prompt=prompts[count], max_new_tokens=max_new_tokens,
+                                                            prompt_formatted=True)
+            
+            # Stop timing
+            end_time = time.perf_counter()
+            inference_time = end_time - start_time
+            print(f"Inference took {inference_time:.3f}s.")
+    
+            # Store results
+            result = {}
+            result['probs'] = probs.squeeze()
+            result['active_experts'] = active_experts.squeeze()       
+            result['prompt'] = d['question']
+            result['response'] = response
+            text = tokenizer.apply_chat_template(prompts[count], tokenize=False, add_generation_prompt=True)
+            result['prompt_tokenized'] = tokenizer([text])
+            result['response_tokenized'] = tokenizer.encode(response)
+            result['subject'] = d['subject']
+            result['inference_time'] = inference_time
+            
+            results.append(result)
+    
+            count += 1
 
     return results

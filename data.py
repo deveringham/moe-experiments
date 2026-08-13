@@ -52,6 +52,8 @@ def get_data_mmlu(n_samples=100, shuffle_seed=100, subset="all"):
 def format_prompts_mmlu(dataset, prompt_reps=1):
     
     messages_list = []
+    subjects = []
+    questions = []
     for d in dataset:
         messages = [
             {
@@ -71,5 +73,7 @@ def format_prompts_mmlu(dataset, prompt_reps=1):
         ]
         for _ in range(prompt_reps):
             messages_list.append(messages)
+            subjects.append(d['subject'])
+            questions.append(d['question'])
         
-    return messages_list
+    return messages_list, subjects, questions
