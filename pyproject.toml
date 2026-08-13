@@ -1,0 +1,28 @@
+[project]
+name = "moe-experiments"
+version = "0.1.0"
+description = "MoE observability experiments"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Pinned per known compatibility constraints:
+    #   - transformers 5.x has an unresolved bnb 4-bit CPU-dispatch bug
+    #     (huggingface/transformers#43872)
+    #   - vllm>=0.22.0 drops the transformers-v4 codepath entirely
+    #     (removed outright in 0.24.0)
+    #   - accelerate/bitsandbytes pinned alongside transformers as the
+    #     same verified-working compatibility set
+    "vllm==0.21.0",
+    "transformers==4.57.3",
+    "accelerate==1.12.0",
+    "bitsandbytes==0.49.1",
+    "datasets",
+    "matplotlib",
+    "seaborn",
+    "h5py",
+    "wandb",
+    "notebook",
+    "ipykernel",
+]
+
+[tool.uv]
+torch-backend = "auto"
