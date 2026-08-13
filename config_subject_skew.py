@@ -29,15 +29,15 @@ n_warmup_samples = 10
 
 # Data configuration
 # For full dataset: n_samples = 15000
-n_samples = 10
+n_samples = 100
 n_subjects = 1
 subjects = get_mmlu_subjects()[:n_subjects]
 
 # Profiling confiuguration
 trace_dir = './vllm_benchmarking/traces/'
-trace_id_general = f'mixtral_subjectgeneral_gpu{n_gpus}_batch{batch_size}_samples{n_samples}'
+trace_id_general = f'{model_id_simple}_subjectgeneral_gpu{n_gpus}_batch{batch_size}_samples{n_samples}'
 trace_path_general = trace_dir + trace_id_general
-trace_ids_subjects = [f'mixtral_subject{s}_gpu{n_gpus}_batch{batch_size}_samples{n_samples}' for s in subjects]
+trace_ids_subjects = [f'{model_id_simple}_subject{s}_gpu{n_gpus}_batch{batch_size}_samples{n_samples}' for s in subjects]
 trace_paths_subjects = [trace_dir + i for i in trace_ids_subjects]
 
 # Output configuration

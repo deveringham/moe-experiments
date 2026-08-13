@@ -229,11 +229,11 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
 # - Start vLLM client
 # - Run inference
 # - Return timing measurements
-async def run_experiment_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, concurrency_limit=1024,
-                                         max_model_len=1024, batch_size=256, gpu_memory_utilization=0.85,
-                                         n_gpus=1, n_warmup_samples=5,
-                                         print_output=False, enable_expert_parallel=False, enable_prefix_caching=False,
-                                         trace_dir=None, trace_active_iterations=2):
+async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, concurrency_limit=1024,
+                                  max_model_len=1024, batch_size=256, gpu_memory_utilization=0.85,
+                                  n_gpus=1, n_warmup_samples=5,
+                                  print_output=False, enable_expert_parallel=False, enable_prefix_caching=False,
+                                  trace_dir=None, trace_active_iterations=2):
     server_process = None
     port = 8000
     results = None
