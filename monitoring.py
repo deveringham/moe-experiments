@@ -36,17 +36,6 @@ class MoEProbe(MoEHook):
     def print_count(self):
         print(f"MoEProbe: Captured {len(self.logs)} routing events from {self.n_routers} router modules.")
         
-    # get expert activation matrix (EAM)
-    # EAM has dimensions [generated_tokens, n_experts, n_routers]
-    def get_eam(self, binary=False):
-        if binary:
-            eam_type = 'eam_binary'
-        else:
-            eam_type = 'eam_probs'
-        
-        eam = torch.stack([torch.cat([l[eam_type] for l in self.logs[n]], dim=0) for n in self.router_names_sorted], dim=-1)
-        
-        return eam
     
     # get router probabilities
     def get_probs(self, batch_size=1):

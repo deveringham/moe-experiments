@@ -71,4 +71,5 @@ def format_prompts_mmlu(dataset, prompt_reps=1):
         ]
         for _ in range(prompt_reps):
             messages_list.append(messages)
+        
     return messages_list
