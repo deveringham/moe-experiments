@@ -24,5 +24,20 @@ dependencies = [
     "ipykernel",
 ]
 
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+ 
+[tool.uv.sources]
+# pin torch
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'linux'" },
+]
+
+
 [tool.uv]
-torch-backend = "auto"
+# guarantee every locked package has a Linux x86_64 wheel
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
