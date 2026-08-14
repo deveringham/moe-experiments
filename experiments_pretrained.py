@@ -124,7 +124,7 @@ def chat_generate(model, tokenizer, probe, prompt="", max_new_tokens=100, clear_
     return response, probs, active_experts
         
 
-def chat_generate_batched(model, tokenizer, probe, prompts=[""], max_new_tokens=100, clear_probe=True, prompt_formatted=True):
+def chat_generate_batched(model, tokenizer, probe, prompts=[""], max_new_tokens=100, clear_probe=True, prompt_formatted=True, max_length=1024):
  
     # Clear monitoring probe
     if clear_probe:
@@ -144,7 +144,7 @@ def chat_generate_batched(model, tokenizer, probe, prompts=[""], max_new_tokens=
         texts.append(text)
         
     # Tokenize with padding
-    model_inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True).to(device)
+    model_inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(device)
 
     # Generate output
     attention_mask=model_inputs['attention_mask']
@@ -171,6 +171,77 @@ def chat_generate_batched(model, tokenizer, probe, prompts=[""], max_new_tokens=
 
     return responses, probs, active_experts, valid_mask
 
+# Function to right-pad a tensor's seq dim (dim=1) up to target length
+def _pad_seq(tensor, target_len, pad_value=0):
+   
+    cur_len = tensor.shape[1]
+    if cur_len == target_len:
+        return tensor
+    pad_shape = list(tensor.shape)
+    pad_shape[1] = target_len - cur_len
+    pad_tensor = torch.full(pad_shape, pad_value, dtype=tensor.dtype)
+    return torch.cat([tensor, pad_tensor], dim=1)
+ 
+
+# Function to merge outputs of two calls to chat_generte with different batch lengths
+# used in chat_generate_batched_with_oom_retry
+def _merge_batch_results(results):
+
+    all_responses = []
+    for r in results:
+        all_responses.extend(r[0])
+ 
+    max_seq_len = max(r[1].shape[1] for r in results)
+ 
+    probs_list = [_pad_seq(r[1], max_seq_len, pad_value=0.0) for r in results]
+    active_experts_list = [_pad_seq(r[2], max_seq_len, pad_value=0) for r in results]
+    valid_mask_list = [_pad_seq(r[3], max_seq_len, pad_value=False) for r in results]
+ 
+    merged_probs = torch.cat(probs_list, dim=0)
+    merged_active_experts = torch.cat(active_experts_list, dim=0)
+    merged_valid_mask = torch.cat(valid_mask_list, dim=0)
+ 
+    return all_responses, merged_probs, merged_active_experts, merged_valid_mask
+ 
+ 
+def chat_generate_batched_with_oom_retry(model, tokenizer, probe,
+                                         prompts=[""], max_new_tokens=100, clear_probe=True,
+                                         prompt_formatted=True, max_length=1024, min_batch=1):
+    
+    try:
+        return chat_generate_batched(
+            model, tokenizer, probe, prompts=prompts,
+            max_new_tokens=max_new_tokens, clear_probe=clear_probe,
+            prompt_formatted=True, max_length=max_length
+        )
+    except torch.cuda.OutOfMemoryError:
+        pass
+
+    torch.cuda.empty_cache()
+
+    if len(prompts) <= min_batch:
+        # Can't split further
+        raise
+
+    mid = len(prompts) // 2
+    print(f"generate_with_oom_retry: OOM on batch of {len(prompts)}, "
+          f"retrying as sub-batches of {mid} and {len(prompts) - mid}...")
+
+    first_half = prompts[:mid]
+    second_half = prompts[mid:]
+
+    result_1 = chat_generate_batched_with_oom_retry(model, tokenizer, probe,
+                                       prompts=first_half, max_new_tokens=max_new_tokens,
+                                       clear_probe=clear_probe, prompt_formatted=prompt_formatted,
+                                       max_length=max_length, min_batch=min_batch)
+    result_2 = chat_generate_batched_with_oom_retry(model, tokenizer, probe,
+                                       prompts=second_half, max_new_tokens=max_new_tokens,
+                                       clear_probe=clear_probe, prompt_formatted=prompt_formatted,
+                                       max_length=max_length, min_batch=min_batch)
+
+    results = _merge_batch_results([result_1, result_2])
+    return results
+        
 
 def save_routing_data(filename, run_id, results):
     
@@ -223,7 +294,8 @@ def get_activations_mmlu(model, tokenizer, dataset, probe, batch_size=1, max_new
             start_time = time.perf_counter()
      
             # Generate batch of responses and get metrics + per-sample validity mask
-            responses, probs, active_experts, valid_mask = chat_generate_batched(
+            # If OOM occurs, repeat with half batch_size
+            responses, probs, active_experts, valid_mask = chat_generate_batched_with_oom_retry(
                 model, tokenizer, probe, prompts=batch_prompts,
                 max_new_tokens=max_new_tokens, prompt_formatted=True)
      
@@ -252,6 +324,9 @@ def get_activations_mmlu(model, tokenizer, dataset, probe, batch_size=1, max_new
                 result['inference_time'] = per_sample_time
                 
                 results.append(result)
+
+            # Clear memory usage between batches
+            torch.cuda.empty_cache()
                 
     else:
         count = 0

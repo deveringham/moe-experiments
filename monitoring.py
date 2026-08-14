@@ -180,7 +180,7 @@ class MoEProbeQwen(MoEProbe, MoEHookQwen):
         # for transformers>4.57.3:
         # outputs are tuple containing logits of size [batch * seq_len, n_experts]
         # and then topk indices
-        router_logits, _, _  = outputs
+        #router_logits, _, _  = outputs
         
         # Calculate probabilities
         probs = torch.softmax(router_logits, dim=-1)

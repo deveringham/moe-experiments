@@ -24,7 +24,7 @@ gpu_memory_utilization = 0.6
 n_gpus = 2
 enable_expert_parallel = True
 enable_prefix_caching = False
-batch_size = 16
+batch_size = 8
 n_warmup_samples = 10
 
 # Data configuration

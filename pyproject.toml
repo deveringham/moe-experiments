@@ -35,7 +35,6 @@ torch = [
     { index = "pytorch-cu130", marker = "sys_platform == 'linux'" },
 ]
 
-
 [tool.uv]
 # guarantee every locked package has a Linux x86_64 wheel
 required-environments = [
