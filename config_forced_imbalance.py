@@ -14,9 +14,9 @@ imbalance_level_high = 100
 n_layers = 8
 n_local_experts = 8
 k = 1
-model_scale_factor = 1 # Scale the parameter count by multiplying with the intermediate dim
 hidden_size = 2048 
-intermediate_size = 8192 * model_scale_factor
+intermediate_size = 8192
+model_dir = "./vllm_benchmarking/models/"
 
 # Inference deployment configuration
 port = 8000
