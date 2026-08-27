@@ -309,17 +309,17 @@ def get_activations_mmlu(model, tokenizer, dataset, probe, batch_size=1, max_new
             # the valid (non-padding, pre/at-EOS) positions of each sample's routing data
             for i in range(len(batch_prompts)):
                 count = i + batch_start
-                response = responses[i]
      
                 result = {}
                 sample_mask = valid_mask[i] # [seq_len]
+                result['idx'] = count
                 result['probs'] = probs[i][sample_mask] # [valid_len, n_experts, n_routers]
                 result['active_experts'] = active_experts[i][sample_mask] # [valid_len, k, n_routers]
-                result['prompt'] = questions[count]
+                result['prompt'] = batch_prompts[i] #questions[count]
                 result['response'] = responses[i]
-                text = tokenizer.apply_chat_template(prompts[count], tokenize=False, add_generation_prompt=True)
-                result['prompt_tokenized'] = tokenizer([text])
-                result['response_tokenized'] = tokenizer.encode(responses[i])
+                #text = tokenizer.apply_chat_template(prompts[count], tokenize=False, add_generation_prompt=True)
+                #result['prompt_tokenized'] = tokenizer([text])
+                #result['response_tokenized'] = tokenizer.encode(responses[i])
                 result['subject'] = subjects[count]
                 result['inference_time'] = per_sample_time
                 

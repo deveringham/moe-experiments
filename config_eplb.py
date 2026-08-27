@@ -13,8 +13,8 @@ from data import *
 model_id_deepseek = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 model_id_qwen = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
 model_id_mistral = "mistralai/Mixtral-8x7B-Instruct-v0.1"
-model_id = model_id_mistral
-model_id_simple = "mistral"
+model_id = model_id_deepseek
+model_id_simple = "deepseek"
 
 # Inference deployment configuration
 port = 8000
@@ -24,7 +24,7 @@ gpu_memory_utilization = 0.6
 n_gpus = 8
 enable_expert_parallel = True
 enable_prefix_caching = False
-batch_size = 8
+batch_size = 16
 n_warmup_samples = 10
 n_runs = 1
 
@@ -40,7 +40,7 @@ trace_path_noeplb = trace_dir + trace_id_noeplb
 
 # Output configuration
 results_file_eplb = f'./vllm_benchmarking/results_{trace_id_eplb}.pkl'
-results_file_noeplb = f'./vllm_benchmarking/results_{trace_id_noeplb}.pkl'
+results_file_eplb = f'./vllm_benchmarking/results_{trace_id_eplb}.pkl'
 
 # torch device
 device = torch.device("cuda")

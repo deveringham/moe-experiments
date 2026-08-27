@@ -1,5 +1,5 @@
 ###
-# config_subject_skew.py
+# config_record_activations.py
 #
 # Hyperparameters for MoE experiment runs using pretrained models and MMLU prompts.
 # Dylan Everingham
@@ -15,6 +15,7 @@ model_id_qwen = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
 model_id_mistral = "mistralai/Mixtral-8x7B-Instruct-v0.1"
 model_id = model_id_qwen
 model_id_simple = "qwen"
+enable_bnb = False
 
 # Data configuration
 # For full dataset: n_samples = 15000
@@ -22,7 +23,7 @@ n_samples = 15000
 
 # Inference deployment configuration
 max_new_tokens = 100
-batch_size = 8
+batch_size = 64
 
 # Output configuration
 # Get unique string id for the run
@@ -30,6 +31,10 @@ import datetime
 timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
 output_dir = './activations/'
 run_id = f'{model_id_simple}_samples{n_samples}'
+if enable_bnb:
+    run_id += '_quant'
+else:
+    run_id += '_noquant'
 results_file = f'{output_dir}activations_{run_id}_{timestamp}.pkl'
 
 # torch device

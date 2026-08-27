@@ -78,8 +78,9 @@ class MoEProbe(MoEHook):
         fig, ax = plt.subplots(1, 1, figsize=(10, 5))
 
         # Collate data
-        active_experts = self.get_active_experts() # [tokens, k, n_routers]
-        active_experts = active_experts[:, :, router_id].flatten().cpu().tolist()
+        active_experts = self.get_active_experts() # [batch, padded_seq_len, k, n_routers]
+        print(f'active experts: {active_experts.shape}')
+        active_experts = active_experts[:, :, :, router_id].flatten().cpu().tolist()
             
         counts = Counter(active_experts)
         #avg_entropy = np.mean(all_entropies)

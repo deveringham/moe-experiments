@@ -1,5 +1,5 @@
 ###
-# experiments_throughput_vllm.py
+# experiments_vllm.py
 #
 # Routines for MoE experiments using vLLM serving interface.
 # Dylan Everingham
@@ -11,22 +11,26 @@ import asyncio
 import time
 import subprocess
 import os
+import json
+import gzip
+import collections
+import glob
 import urllib.request
 import urllib.error
 from openai import AsyncOpenAI
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+import vllm
 from experiments_pretrained import *
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_expert_parallel=False, enable_prefix_caching=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, enable_eplb=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10):
     print(f"Starting vLLM server for {model_name}...")
     
     cmd = [
         "vllm", "serve", model_name,
         "--port", str(port),
-        #"--quantization", "gptq_marlin",
         "--dtype", "auto",
         "--max-model-len", str(max_model_len),
         "--gpu-memory-utilization", str(gpu_memory_utilization),
@@ -34,8 +38,9 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         "--tensor-parallel-size", str(n_gpus),
         "--data-parallel-size", "1",
         "--seed", str(seed),
-        "--override-generation-config", "{\"temperature\": 0.0}",
-        #"--enable-eplb",
+        "--override-generation-config", '{"temperature": 0.0}',
+        "--enforce-eager",
+        "--no-async-scheduling",
     ]
     
     if trace_dir:
@@ -49,7 +54,13 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         cmd.append("--enable-prefix-caching")
     else:
         cmd.append("--no-enable-prefix-caching")
-    
+
+    if enable_bnb:
+         cmd.extend(["--quantization", "bitsandbytes"])
+
+    if enable_eplb:
+        cmd.append("--enable-eplb")
+        
     server_process = subprocess.Popen(cmd)
     
     # Poll the endpoint for 200 OK
@@ -232,7 +243,8 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
 async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, concurrency_limit=1024,
                                   max_model_len=1024, batch_size=256, gpu_memory_utilization=0.85,
                                   n_gpus=1, n_warmup_samples=5,
-                                  print_output=False, enable_expert_parallel=False, enable_prefix_caching=False,
+                                  print_output=False, enable_bnb=False, enable_expert_parallel=False,
+                                  enable_prefix_caching=False, enable_eplb=False,
                                   trace_dir=None, trace_active_iterations=2):
     server_process = None
     port = 8000
@@ -245,7 +257,8 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                            batch_size=batch_size,
                                            gpu_memory_utilization=gpu_memory_utilization,
                                            n_gpus=n_gpus, enable_expert_parallel=enable_expert_parallel,
-                                           enable_prefix_caching=enable_prefix_caching,
+                                           enable_prefix_caching=enable_prefix_caching, enable_bnb=enable_bnb,
+                                           enable_eplb=enable_eplb,
                                            trace_dir=trace_dir, trace_start_iteration=n_samples//2,
                                            trace_active_iterations=trace_active_iterations)
 
@@ -279,109 +292,207 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
 
     return results
 
-def plot_hist_ttfts(overall_results, subject_results=None, x_limits=(1000,20000), title=None):
-    
-    plt.figure(figsize=(10,8))
-    
-    # Convert all TTFT to ms
-    overall_ttfts = [r['ttft']*1000 for r in overall_results]
-    overall_avg_ttft = np.mean(overall_ttfts)
-    overall_total_requests = len(overall_ttfts)
-    all_ttfts = []
-    all_ttfts += overall_ttfts
-    if subject_results is not None:
-        n_subjects = len(subject_results)
-        subject_ttfts = {s:[r['ttft']*1000 for r in subject_results[s]] for s in subject_results}
-        subject_avg_ttfts = {s:np.mean(subject_ttfts[s]) for s in subject_ttfts}
-        subject_total_requests = {s:len(subject_ttfts[s]) for s in subject_ttfts}
-        for s in subject_ttfts:
-            all_ttfts += subject_ttfts[s]
-    
-    # Create uniform bins for histograms
-    n_bins = 100
-    min_ttft = max(min(all_ttfts), x_limits[0])
-    max_ttft = min(max(all_ttfts), x_limits[1])
-    bin_width_ms = (max_ttft - min_ttft) / n_bins
-    fixed_bins = np.arange(min_ttft, max_ttft + bin_width_ms, bin_width_ms)
-    
-    # Plot subjects in blue...
-    if subject_results is not None:
-        result_idx = 0
-        blue_colors = plt.get_cmap('Blues')(np.linspace(0.4, 1.0, n_subjects))
-        for s in subject_ttfts:
-            plt.hist(list(subject_ttfts[s]), bins=fixed_bins,
-                     color=blue_colors[result_idx],
-                     label=f'\'{s}\' ({subject_total_requests[s]} requests)')
-            result_idx += 1
-    
-    # ...then superimpose overall in red
-    plt.hist(list(overall_ttfts), bins=fixed_bins,
-             color='r',
-             label=f'prompts drawn from all subjects ({overall_total_requests} requests)')
-    
-    if title:
-        plt.title(title, fontsize=14, pad=15)
-    else:
-        plt.title(f'Distribution of per-request TTFT for MMLU Requests', fontsize=14, pad=15)
-    plt.xlabel('TTFT (ms)', fontsize=12)
-    plt.ylabel('Frequency (Number of Requests)', fontsize=12)
-    plt.legend()
-    plt.grid(axis='y', alpha=0.5, linestyle='--')
+def plot_forcedimbalance_results(results_balanced, results_imbalanced):
 
+    # Get metrics: TTFT, TPOT
+    ttfts_balanced = [r['ttft']*1000 for r in results_balanced]
+    ttfts_imbalanced = [r['ttft']*1000 for r in results_imbalanced]
+    tpots_balanced = [r['tpot']*1000 for r in results_balanced]
+    tpots_imbalanced = [r['tpot']*1000 for r in results_imbalanced]
+    all_ttfts = ttfts_balanced + ttfts_imbalanced
+    all_tpots = tpots_balanced + tpos_imbalanced
+    min_ttft = min(all_ttfts)
+    min_tpot = min(all_tpots)
+    max_ttft = max(all_ttfts)
+    max_tpot = max(all_tpots)
+    avg_ttfts_balanced = np.mean(ttfts_balanced)
+    avg_ttfts_imbalanced = np.mean(ttfts_imbalanced)
+    avg_tpots_balanced = np.mean(tpots_balanced)
+    avg_tpots_imbalanced = np.mean(tpots_imbalanced)
+    
+    fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+    plt.style.use('seaborn-v0_8-whitegrid')
+
+    # Plot 1: TTFT
+    ax = axes[0][0]
+    # Create uniform bins
+    n_bins = 100
+    bin_width_ttft = (max_ttft - min_ttft) / n_bins
+    bins_ttft = np.arange(min_ttft, max_ttft + bin_width_ttft, bin_width_ttft)
+    
+    # Hist for each
+    ax.hist(ttfts_balanced[k], bins=bins_ttft,
+                  label='baseline model')
+    ax.hist(ttfts_imbalanced[k], bins=bins_ttft,
+                  label='imbalanced model')
+
+    ax.set_title('TTFT vs. Forced Imbalance')
+    ax.set_xlabel('TTFT(ms)')
+    ax.set_ylabel('Frequency')
+    ax.legend()
+    
+    # Plot 2: TPOT
+    ax = axes[0][1]
+    # Create uniform bins
+    n_bins = 100
+    bin_width_tpot = (max_tpot - min_tpot) / n_bins
+    bins_tpot = np.arange(min_tpot, max_tpot + bin_width_tpot, bin_width_tpot)
+    
+    # Hist for each
+    ax.hist(tpots_balanced[k], bins=bins_tpot,
+                  label='baseline model')
+    ax.hist(tpots_imbalanced[k], bins=bins_tpot,
+                  label='imbalanced model')
+
+    ax.set_title('TPOT vs. Forced Imbalance')
+    ax.set_xlabel('TPOT(ms)')
+    ax.set_ylabel('Frequency')
+    ax.legend()
+    fig.suptitle('Performance Metrics from vLLM')
     plt.tight_layout()
     plt.show()
 
-def plot_hist_tpots(overall_results, subject_results=None, x_limits=(0,50), title=None):
-    
-    plt.figure(figsize=(10,8))
-    
-    # Convert all TPOT to ms
-    overall_tpots = [r['tpot']*1000 for r in overall_results]
-    overall_avg_tpot = np.mean(overall_tpots)
-    overall_total_requests = len(overall_tpots)
-    all_tpots = []
-    all_tpots += overall_tpots
-    if subject_results is not None:
-        n_subjects = len(subject_results)
-        subject_tpots = {s:[r['tpot']*1000 for r in subject_results[s]] for s in subject_results}
-        subject_avg_tpots = {s:np.mean(subject_tpots[s]) for s in subject_tpots}
-        subject_total_requests = {s:len(subject_tpots[s]) for s in subject_tpots}
-        for s in subject_tpots:
-            all_tpots += subject_tpots[s]
-    
-    # Create uniform bins for histograms
-    n_bins = 100
-    min_tpot = max(min(all_tpots), x_limits[0])
-    max_tpot = min(max(all_tpots), x_limits[1])
-    bin_width_ms = min((max_tpot - min_tpot) / n_bins, 1)
-    fixed_bins = np.arange(min_tpot, max_tpot + bin_width_ms, bin_width_ms)
-    
-    # Plot subjects in blue...
-    if subject_results is not None:
-        result_idx = 0
-        blue_colors = plt.get_cmap('Blues')(np.linspace(0.4, 1.0, n_subjects))
-        for s in subject_tpots:
-            plt.hist(list(subject_tpots[s]), bins=fixed_bins,
-                     color=blue_colors[result_idx],
-                     label=f'\'{s}\' ({subject_total_requests[s]} requests)')
-            result_idx += 1
-    
-    # ...then superimpose overall in red
-    plt.hist(list(overall_tpots), bins=fixed_bins,
-             color='r',
-             label=f'prompts drawn from all subjects ({overall_total_requests} requests)')
-    
-    if title:
-        plt.title(title, fontsize=14, pad=15)
-    else:
-        plt.title(f'Distribution of per-request TPOT for MMLU Requests', fontsize=14, pad=15)
-    plt.xlabel('TPOT (ms)', fontsize=12)
-    plt.ylabel('Frequency (Number of Requests)', fontsize=12)
-    plt.legend()
-    plt.grid(axis='y', alpha=0.5, linestyle='--')
+def plot_eplb_results(results_eplb, results_noeplb):
 
+    # Get metrics: TTFT, TPOT
+    ttfts_eplb = [r['ttft']*1000 for r in results_eplb]
+    ttfts_noeplb = [r['ttft']*1000 for r in results_noeplb]
+    tpots_eplb = [r['tpot']*1000 for r in results_eplb]
+    tpots_noeplb = [r['tpot']*1000 for r in results_noeplb]
+    all_ttfts = ttfts_ebpl + ttfts_noeplb
+    all_tpots = tpots_eplb + tpos_noeplb
+    min_ttft = min(all_ttfts)
+    min_tpot = min(all_tpots)
+    max_ttft = max(all_ttfts)
+    max_tpot = max(all_tpots)
+    avg_ttfts_eplb = np.mean(ttfts_eplb)
+    avg_ttfts_noeplb = np.mean(ttfts_noeplb)
+    avg_tpots_eplb = np.mean(tpots_eplb)
+    avg_tpots_noeplb = np.mean(tpots_noeplb)
+    
+    fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+    plt.style.use('seaborn-v0_8-whitegrid')
+
+    # Plot 1: TTFT
+    ax = axes[0][0]
+    # Create uniform bins
+    n_bins = 100
+    bin_width_ttft = (max_ttft - min_ttft) / n_bins
+    bins_ttft = np.arange(min_ttft, max_ttft + bin_width_ttft, bin_width_ttft)
+    
+    # Hist for each
+    ax.hist(ttfts_eplb[k], bins=bins_ttft,
+                  label='eplb enabled')
+    ax.hist(ttfts_noeplb[k], bins=bins_ttft,
+                  label='eplb disabled')
+
+    ax.set_title('TTFT vs. EPLB')
+    ax.set_xlabel('TTFT(ms)')
+    ax.set_ylabel('Frequency')
+    ax.legend()
+    
+    # Plot 2: TPOT
+    ax = axes[0][1]
+    # Create uniform bins
+    n_bins = 100
+    bin_width_tpot = (max_tpot - min_tpot) / n_bins
+    bins_tpot = np.arange(min_tpot, max_tpot + bin_width_tpot, bin_width_tpot)
+    
+    # Hist for each
+    ax.hist(tpots_eplb[k], bins=bins_tpot,
+                  label='eplb enabled')
+    ax.hist(tpots_noeplb[k], bins=bins_tpot,
+                  label='eplb disabled')
+
+    ax.set_title('TPOT vs. EPLB')
+    ax.set_xlabel('TPOT(ms)')
+    ax.set_ylabel('Frequency')
+    ax.legend()
+    fig.suptitle('Performance Metrics from vLLM')
     plt.tight_layout()
     plt.show()
+
+def plot_result_metrics(results_dict):
+    
+    # Remove any failed runs
+    results_keys = list(results_dict.keys()) # e.g. alphas for synthetic workloads
+    results = {k: results_dict[k] for k in results_keys if results_dict[k] is not None}
+    results_keys = list(results.keys()) # update
+            
+    # Get metrics: TTFT, TPOT
+    ttfts = {k: [r['ttft']*1000 for r in results[k]] for k in results_keys}
+    tpots = {k: [r['tpot']*1000 for r in results[k]] for k in results_keys}
+    all_ttfts = sum(list(ttfts.values()), [])
+    all_tpots = sum(list(tpots.values()), [])
+    min_ttft = min(all_ttfts)
+    min_tpot = min(all_tpots)
+    max_ttft = max(all_ttfts)
+    max_tpot = max(all_tpots)
+    avg_ttfts = {k: np.mean(ttfts[k]) for k in results_keys}
+    avg_tpots = {k: np.mean(tpots[k]) for k in results_keys}
+    
+    fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+    plt.style.use('seaborn-v0_8-whitegrid')
+    alpha_colors = plt.cm.plasma(torch.linspace(0, 1, len(results_keys)))
+
+    # Plot 1: TTFT
+    ax = axes[0][0]
+    # Create uniform bins
+    n_bins = 100
+    bin_width_ttft = (max_ttft - min_ttft) / n_bins
+    bins_ttft = np.arange(min_ttft, max_ttft + bin_width_ttft, bin_width_ttft)
+    
+    # Hist for each alpha
+    for i, k in enumerate(results_keys):
+        ax.hist(ttfts[k], bins=bins_ttft,
+                      color=alpha_colors[i],
+                      label=f'alpha = {k}')
+
+    ax.set_title('TTFT vs. Alpha (Imbalance)')
+    ax.set_xlabel('TTFT(ms)')
+    ax.set_ylabel('Frequency')
+    ax.legend()
+    
+    # Plot 2: TPOT
+    ax = axes[0][1]
+    # Create uniform bins
+    n_bins = 100
+    bin_width_tpot = (max_tpot - min_tpot) / n_bins
+    bins_tpot = np.arange(min_tpot, max_tpot + bin_width_tpot, bin_width_tpot)
+    
+    # Hist for each alpha
+    for i, k in enumerate(results_keys):
+        ax.hist(tpots[k], bins=bins_tpot,
+                      color=alpha_colors[i],
+                      label=f'alpha = {k}')
+
+    ax.set_title('TPOT vs. Alpha (Imbalance)')
+    ax.set_xlabel('TPOT(ms)')
+    ax.set_ylabel('Frequency')
+    ax.legend()
+
+    # Plot 3: Avg TPOT vs. Alpha
+    ax = axes[1][0]
+    x = results_keys
+    y = [avg_tpots[k] for k in results_keys]
+    ax.plot(x, y, 'o-', color='b')
+    ax.set_title('Average TPOT vs. Alpha (Imbalance)')
+    ax.set_xlabel('Load Imbalance (Parameterized by Alpha)')
+    ax.set_ylabel('TPOT(ms)')
+
+    # Plot 4: Avg TTFT vs. Alpha
+    ax = axes[1][1]
+    x = results_keys
+    y = [avg_ttfts[k] for k in results_keys]
+    ax.plot(x, y, 'o-', color='b')
+    ax.set_title('Average TTFT vs. Alpha (Imbalance)')
+    ax.set_xlabel('Load Imbalance (Parameterized by Alpha)')
+    ax.set_ylabel('TTFT(ms)')
+
+    fig.suptitle('Performance Metrics from vLLM')
+    plt.tight_layout()
+    plt.show()
+    
 
 def plot_hist_prefill_throughput(overall_results, subject_results=None, x_limits=(0,20000), title=None):
     
